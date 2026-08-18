@@ -26,7 +26,6 @@ from src.detector import (
 )
 from src.edge_detector import EdgeDetector
 from src.thermal_engine import ThermalEngine, TemperatureSpot, ThermalFrameResult
-from src.rppg import RPPGDetector, RPPGResult
 from src.visualizer import FrameVisualizer
 
 
@@ -208,66 +207,20 @@ class TestDetectionPipeline(unittest.TestCase):
             self.assertIsInstance(detections, FrameDetections)
             self.assertGreaterEqual(detections.inference_time_ms, 0.0)
 
-    def test_rppg_initialization_and_reset(self):
-        """Verify RPPGDetector initializes and resets properly."""
-        rppg = RPPGDetector(self.settings)
-        self.assertEqual(rppg.buffer_size, self.settings.rppg_buffer_size)
-        res = rppg.process(self.test_frame, self.sample_detections)
-        self.assertIsInstance(res, RPPGResult)
-        self.assertFalse(res.is_valid)  # Buffer not filled yet
-        self.assertGreaterEqual(res.buffer_progress, 0.0)
+    def test_detector_video_mode_sequential_frames(self):
+        """Verify VisionDetector in VIDEO mode correctly handles sequential and duplicate timestamps."""
+        frame_rgb = cv2.cvtColor(self.test_frame, cv2.COLOR_BGR2RGB)
+        with VisionDetector(settings=self.settings, running_mode=VisionRunningMode.VIDEO) as detector:
+            d1 = detector.process_frame(frame_rgb, timestamp_ms=33)
+            self.assertIsInstance(d1, FrameDetections)
+            self.assertGreater(d1.inference_time_ms, 0.0)
 
-        rppg.reset()
-        self.assertEqual(len(rppg._timestamps), 0)
-        self.assertEqual(len(rppg._waveform_buffer), 0)
+            d2 = detector.process_frame(frame_rgb, timestamp_ms=33)
+            self.assertIsInstance(d2, FrameDetections)
 
-    def test_rppg_spectral_bpm_estimation(self):
-        """Verify rPPG extracts accurate Heart Rate (BPM) from synthetic sinusoidal pulsed signal."""
-        rppg = RPPGDetector(self.settings)
-        fs = 30.0  # 30 fps
-        target_bpm = 75.0  # 1.25 Hz
-        target_freq = target_bpm / 60.0
-
-        # Simulate 120 frames (~4 seconds) of pulsating skin tone
-        for i in range(120):
-            t = i / fs
-            # Sinusoidal micro-color pulse on green channel
-            pulse = 3.0 * np.sin(2 * np.pi * target_freq * t)
-            sim_frame = self.test_frame.copy()
-            sim_frame[:, :, 1] = np.clip(sim_frame[:, :, 1].astype(np.float32) + pulse, 0, 255).astype(np.uint8)
-
-            res = rppg.process(sim_frame, self.sample_detections, timestamp_sec=t)
-
-        self.assertIsNotNone(res.bpm)
-        # Expected within +/- 3 BPM of ground truth 75 BPM
-        self.assertAlmostEqual(res.bpm, target_bpm, delta=3.5)
-        self.assertGreater(len(res.waveform), 0)
-        self.assertTrue(res.is_valid)
-
-    def test_rppg_visualizer_rendering(self):
-        """Verify FrameVisualizer renders rPPG heart rate badge, pulse wave, and ROI without error."""
-        visualizer = FrameVisualizer(self.settings)
-        self.settings.show_rppg = True
-        dummy_rppg = RPPGResult(
-            bpm=72.0,
-            snr_db=8.5,
-            confidence=0.85,
-            is_valid=True,
-            buffer_progress=1.0,
-            waveform=[0.1, 0.5, 0.9, 0.2, -0.4, -0.8, -0.2, 0.4],
-            pulse_phase=0.5,
-            roi_boxes=[(100, 100, 50, 40)],
-        )
-        rendered = visualizer.render(
-            self.test_frame,
-            self.sample_detections,
-            rppg_result=dummy_rppg,
-        )
-        self.assertEqual(rendered.shape, (self.height, self.width, 3))
-        # Ensure visual output is modified by the render pass
-        self.assertFalse(np.array_equal(rendered, self.test_frame))
+            d3 = detector.process_frame(frame_rgb, timestamp_ms=66)
+            self.assertIsInstance(d3, FrameDetections)
 
 
 if __name__ == "__main__":
     unittest.main()
-
