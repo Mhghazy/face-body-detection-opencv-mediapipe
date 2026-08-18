@@ -1,7 +1,7 @@
 """
 Thermal Vision & Radiometric Body Temperature Engine
-Provides real-time thermal heatmap synthesis, landmark hotspot temperature sampling,
-radiometric 16-bit decoding, and fever alert monitoring.
+Provides real-time thermal heatmap synthesis with pixel-precise Body & Face Segmentation,
+landmark hotspot temperature sampling, radiometric 16-bit decoding, and fever monitoring.
 """
 
 from dataclasses import dataclass, field
@@ -36,6 +36,7 @@ class TemperatureSpot:
 class ThermalFrameResult:
     """Contains rendered thermal false-color image and extracted temperature hotspots."""
     thermal_bgr: np.ndarray
+    segmentation_mask: np.ndarray  # float32 [0.0, 1.0]
     spots: List[TemperatureSpot] = field(default_factory=list)
     min_temp_c: float = 20.0
     max_temp_c: float = 40.0
@@ -54,9 +55,8 @@ COLORMAP_MAP = {
 
 class ThermalEngine:
     """
-    Bio-Physiological Thermal Simulator and Radiometric Decoder.
-    Synthesizes realistic thermal heat diffusion fields around face/body landmarks
-    and extracts accurate clinical surrogate temperatures.
+    Bio-Physiological Thermal Simulator and Radiometric Decoder with
+    Neural & Landmark-Driven Body & Face Segmentation.
     """
 
     def __init__(self, settings: AppSettings):
@@ -69,8 +69,107 @@ class ThermalEngine:
         self._ema_chest_c: Optional[float] = None
         self._ema_alpha = 0.15
 
-        # Pre-generate scale legend cache
-        self._legend_cache: Dict[Tuple[str, int, int, str], np.ndarray] = {}
+    def generate_body_face_segmentation_mask(
+        self,
+        frame_bgr: np.ndarray,
+        detections: FrameDetections,
+    ) -> np.ndarray:
+        """
+        Synthesizes a pixel-accurate segmentation mask [0.0, 1.0] of the human body and face
+        using dense 478-vertex face geometry, 33-joint kinematic pose capsules, and hand contours.
+        """
+        h, w = frame_bgr.shape[:2]
+        seg_mask = np.zeros((h, w), dtype=np.uint8)
+
+        # 1. Face Segmentation (High-precision convex hull of 478 face landmarks + scalp/neck)
+        for face in detections.faces:
+            lms = face.landmarks
+            if len(lms) >= 468:
+                pts = np.array([[lm.px, lm.py] for lm in lms], dtype=np.int32)
+                face_hull = cv2.convexHull(pts)
+                cv2.fillPoly(seg_mask, [face_hull], 255)
+
+                # Expand scalp / forehead region slightly upwards
+                p10 = lms[10]   # Forehead top
+                p152 = lms[152] # Chin
+                face_h = max(20, abs(p152.py - p10.py))
+                face_w = max(20, abs(lms[454].px - lms[234].px))
+                scalp_center = (p10.px, max(0, p10.py - int(face_h * 0.15)))
+                cv2.ellipse(seg_mask, scalp_center, (int(face_w * 0.48), int(face_h * 0.35)), 0, 0, 360, 255, -1)
+
+                # Add Neck segment connecting lower jaw to shoulders
+                chin_x, chin_y = p152.px, p152.py
+                neck_pts = np.array([
+                    [lms[234].px, lms[234].py],
+                    [chin_x - int(face_w * 0.25), chin_y + int(face_h * 0.45)],
+                    [chin_x + int(face_w * 0.25), chin_y + int(face_h * 0.45)],
+                    [lms[454].px, lms[454].py],
+                    [chin_x, chin_y]
+                ], dtype=np.int32)
+                cv2.fillPoly(seg_mask, [cv2.convexHull(neck_pts)], 255)
+
+        # 2. Body Pose Kinematic Segmentation (Torso Quadrilateral & Limbs Capsules)
+        for pose in detections.poses:
+            lms = pose.landmarks
+            if len(lms) >= 33:
+                s_left, s_right = lms[11], lms[12]
+                h_left, h_right = lms[23], lms[24]
+
+                if s_left.visibility > 0.3 and s_right.visibility > 0.3:
+                    torso_w = max(40, int(abs(s_right.px - s_left.px)))
+                    limb_thickness = max(18, int(torso_w * 0.28))
+                    leg_thickness = max(22, int(torso_w * 0.32))
+
+                    # Torso polygon (Shoulders to Hips with padding)
+                    torso_polygon = np.array([
+                        [s_left.px - limb_thickness // 2, s_left.py - 10],
+                        [s_right.px + limb_thickness // 2, s_right.py - 10],
+                        [h_right.px + limb_thickness // 2, h_right.py + 15],
+                        [h_left.px - limb_thickness // 2, h_left.py + 15]
+                    ], dtype=np.int32)
+                    cv2.fillPoly(seg_mask, [torso_polygon], 255)
+
+                    # Upper Limbs & Arms (Capsules along bone segments)
+                    limb_segments = [
+                        (11, 13), (13, 15), # Left upper arm, forearm
+                        (12, 14), (14, 16), # Right upper arm, forearm
+                    ]
+                    for idx1, idx2 in limb_segments:
+                        p1, p2 = lms[idx1], lms[idx2]
+                        if p1.visibility > 0.35 and p2.visibility > 0.35:
+                            cv2.line(seg_mask, (p1.px, p1.py), (p2.px, p2.py), 255, limb_thickness, cv2.LINE_AA)
+                            cv2.circle(seg_mask, (p1.px, p1.py), limb_thickness // 2, 255, -1)
+                            cv2.circle(seg_mask, (p2.px, p2.py), limb_thickness // 2, 255, -1)
+
+                    # Lower Limbs & Legs
+                    leg_segments = [
+                        (23, 25), (25, 27), # Left thigh, calf
+                        (24, 26), (26, 28), # Right thigh, calf
+                    ]
+                    for idx1, idx2 in leg_segments:
+                        p1, p2 = lms[idx1], lms[idx2]
+                        if p1.visibility > 0.35 and p2.visibility > 0.35:
+                            cv2.line(seg_mask, (p1.px, p1.py), (p2.px, p2.py), 255, leg_thickness, cv2.LINE_AA)
+                            cv2.circle(seg_mask, (p1.px, p1.py), leg_thickness // 2, 255, -1)
+                            cv2.circle(seg_mask, (p2.px, p2.py), leg_thickness // 2, 255, -1)
+
+        # 3. Hands Segmentation (Convex hull of 21 hand landmarks)
+        for hand in detections.hands:
+            if len(hand.landmarks) >= 21:
+                hand_pts = np.array([[lm.px, lm.py] for lm in hand.landmarks], dtype=np.int32)
+                hand_hull = cv2.convexHull(hand_pts)
+                cv2.fillPoly(seg_mask, [hand_hull], 255)
+                # Dilate hands slightly to cover fingertips completely
+                kernel = np.ones((5, 5), np.uint8)
+                cv2.dilate(seg_mask, kernel, iterations=1)
+
+        # If no landmarks detected, return clean zero mask
+        if not np.any(seg_mask):
+            return np.zeros((h, w), dtype=np.float32)
+
+        # Smooth mask boundaries with a soft Gaussian edge falloff to simulate natural thermal dissipation
+        smoothed = cv2.GaussianBlur(seg_mask, (19, 19), 0)
+        return (smoothed.astype(np.float32) / 255.0)
 
     def process(
         self,
@@ -87,7 +186,7 @@ class ThermalEngine:
             hardware_radiometric_raw: Optional raw 16-bit thermal frame from physical hardware sensor.
             
         Returns:
-            ThermalFrameResult containing thermal image, spot temperatures, and fever flags.
+            ThermalFrameResult containing thermal image, segmentation mask, spot temperatures, and fever flags.
         """
         h, w = frame_bgr.shape[:2]
         now = time.time()
@@ -107,27 +206,30 @@ class ThermalEngine:
         width: int,
         height: int,
     ) -> ThermalFrameResult:
-        """Simulates physiological heat diffusion and calculates realistic spot temperatures."""
-        # 1. Base grayscale ambient background field
+        """Simulates physiological heat diffusion and calculates realistic spot temperatures with segmentation."""
+        # 1. Compute Body & Face Segmentation Mask
+        seg_mask = self.generate_body_face_segmentation_mask(frame_bgr, detections)
+
+        # 2. Base grayscale ambient background field
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        
-        # Soft bilateral filter to remove high-frequency noise for smooth thermal look
         smooth_gray = cv2.bilateralFilter(gray, d=7, sigmaColor=50, sigmaSpace=50)
 
-        # Map ambient grayscale [0, 255] to baseline ambient temperature range [20.0°C, 28.0°C]
-        temp_field = 20.0 + (smooth_gray.astype(np.float32) / 255.0) * 8.0
+        # Background ambient field: 21.0°C to 24.5°C (Cool background radiation)
+        ambient_temp_field = 21.0 + (smooth_gray.astype(np.float32) / 255.0) * 3.5
 
-        # Micro-fluctuation wave
+        # 3. Physiological Person Body Temperature Field
+        # Skin / clothing texture modulation for photorealistic thermal contrast
+        body_tex_mod = ((smooth_gray.astype(np.float32) - 128.0) / 128.0) * 0.75
+        body_temp_field = 36.2 + body_tex_mod
+
+        # Micro-fluctuation wave (±0.08°C)
         micro_wave = 0.08 * math.sin(self._perfusion_phase) + 0.03 * math.sin(self._perfusion_phase * 2.3)
 
         spots: List[TemperatureSpot] = []
         fever_thresh = self.settings.fever_threshold_c
         primary_temp: Optional[float] = None
 
-        # Mask accumulator for body and face regions
-        body_mask = np.zeros((height, width), dtype=np.float32)
-
-        # A. Process Faces (Forehead, Canthi, Nose, Face Oval)
+        # A. Process Faces (Forehead temporal core, Eye canthi, Cheeks)
         for face in detections.faces:
             lms = face.landmarks
             num_pts = len(lms)
@@ -136,25 +238,21 @@ class ThermalEngine:
 
             # Forehead Landmark (Index 10: Top center forehead, 151: Mid forehead)
             forehead_pt = lms[10]
-            forehead_mid = lms[151]
             fx, fy = forehead_pt.px, forehead_pt.py
 
-            # Inner eye canthi (Index 33: Left eye inner corner, 263: Right eye inner corner)
+            # Inner eye canthi (Index 33 & 263)
             left_eye_canthus = lms[33]
             right_eye_canthus = lms[263]
 
             # Nose tip (Index 1)
             nose_pt = lms[1]
 
-            # Calculate face size scale
             face_size = max(20, int(math.hypot(lms[10].px - lms[152].px, lms[10].py - lms[152].py)))
-            head_radius = int(face_size * 0.45)
-
-            # Local skin intensity modulation
-            skin_brightness = float(smooth_gray[max(0, min(height-1, fy)), max(0, min(width-1, fx))]) / 255.0
-            skin_offset = (skin_brightness - 0.5) * 0.3
 
             # Calculate raw forehead temperature (Normal baseline: 36.8°C)
+            skin_brightness = float(smooth_gray[max(0, min(height-1, fy)), max(0, min(width-1, fx))]) / 255.0
+            skin_offset = (skin_brightness - 0.5) * 0.25
+
             raw_forehead_c = 36.80 + skin_offset + micro_wave
             if self._ema_forehead_c is None:
                 self._ema_forehead_c = raw_forehead_c
@@ -166,19 +264,18 @@ class ThermalEngine:
 
             spots.append(TemperatureSpot.create("Forehead", fx, fy, forehead_spot_c, fever_thresh))
 
-            # Splat forehead heat circle (Warmer core ~36.8°C)
-            cv2.circle(temp_field, (fx, fy), head_radius, forehead_spot_c, -1)
-            cv2.circle(body_mask, (fx, fy), head_radius, 1.0, -1)
+            # Forehead Core Hotspot (36.8°C)
+            cv2.circle(body_temp_field, (fx, fy), int(face_size * 0.40), forehead_spot_c, -1)
 
-            # Eye canthi warmer spots
-            canthus_temp = forehead_spot_c + 0.1
-            cv2.circle(temp_field, (left_eye_canthus.px, left_eye_canthus.py), int(face_size * 0.12), canthus_temp, -1)
-            cv2.circle(temp_field, (right_eye_canthus.px, right_eye_canthus.py), int(face_size * 0.12), canthus_temp, -1)
+            # Eye canthi warmer spots (37.0°C)
+            canthus_temp = forehead_spot_c + 0.15
+            cv2.circle(body_temp_field, (left_eye_canthus.px, left_eye_canthus.py), int(face_size * 0.12), canthus_temp, -1)
+            cv2.circle(body_temp_field, (right_eye_canthus.px, right_eye_canthus.py), int(face_size * 0.12), canthus_temp, -1)
 
-            # Nose cooler spot (~32.5°C)
-            cv2.circle(temp_field, (nose_pt.px, nose_pt.py), int(face_size * 0.15), 32.5, -1)
+            # Nose cooler extremity (~32.5°C)
+            cv2.circle(body_temp_field, (nose_pt.px, nose_pt.py), int(face_size * 0.15), 32.8, -1)
 
-        # B. Process Body Poses (Core Chest, Limbs)
+        # B. Process Body Poses (Core Chest & Limbs)
         for pose in detections.poses:
             lms = pose.landmarks
             if len(lms) < 33:
@@ -188,9 +285,9 @@ class ThermalEngine:
             s_left, s_right = lms[11], lms[12]
             if s_left.visibility > 0.4 and s_right.visibility > 0.4:
                 cx = (s_left.px + s_right.px) // 2
-                cy = (s_left.py + s_right.py) // 2 + 25  # Lower slightly to sternum/chest
+                cy = (s_left.py + s_right.py) // 2 + 25
                 torso_w = max(30, int(abs(s_right.px - s_left.px)))
-                chest_radius = int(torso_w * 0.6)
+                chest_radius = int(torso_w * 0.55)
 
                 raw_chest_c = 36.65 + micro_wave
                 if self._ema_chest_c is None:
@@ -203,10 +300,7 @@ class ThermalEngine:
                     primary_temp = chest_spot_c
 
                 spots.append(TemperatureSpot.create("Core Chest", cx, cy, chest_spot_c, fever_thresh))
-
-                # Splat core body heat
-                cv2.circle(temp_field, (cx, cy), chest_radius, chest_spot_c, -1)
-                cv2.circle(body_mask, (cx, cy), chest_radius, 1.0, -1)
+                cv2.circle(body_temp_field, (cx, cy), chest_radius, chest_spot_c, -1)
 
             # Hands/Wrists (Pose Landmarks 15 and 16)
             for w_idx, name in [(15, "L-Hand"), (16, "R-Hand")]:
@@ -214,28 +308,32 @@ class ThermalEngine:
                 if wrist.visibility > 0.45:
                     wrist_temp_c = round(33.6 + micro_wave, 1)
                     spots.append(TemperatureSpot.create(name, wrist.px, wrist.py, wrist_temp_c, fever_thresh))
-                    cv2.circle(temp_field, (wrist.px, wrist.py), 25, wrist_temp_c, -1)
-                    cv2.circle(body_mask, (wrist.px, wrist.py), 25, 1.0, -1)
+                    cv2.circle(body_temp_field, (wrist.px, wrist.py), 25, wrist_temp_c, -1)
 
-        # Smooth the discrete splats with large Gaussian blur to simulate continuous thermal conduction
-        temp_field_smooth = cv2.GaussianBlur(temp_field, (45, 45), 0)
+        # 4. Smooth Body Internal Heat Field
+        body_temp_smooth = cv2.GaussianBlur(body_temp_field, (31, 31), 0)
 
-        # Normalize temperature field [20°C - 40°C] into [0 - 255]
+        # 5. Composite Background & Segmented Body Temperatures via the Segmentation Mask
+        # Where seg_mask is 1.0 (body/face), use body_temp_smooth; where 0.0 (background), use ambient_temp_field
+        final_temp_matrix = ambient_temp_field * (1.0 - seg_mask) + body_temp_smooth * seg_mask
+
+        # 6. Normalize temperature matrix [20.0°C - 40.0°C] into [0 - 255]
         min_scale = 20.0
         max_scale = 40.0
-        norm_field = np.clip((temp_field_smooth - min_scale) / (max_scale - min_scale), 0.0, 1.0)
+        norm_field = np.clip((final_temp_matrix - min_scale) / (max_scale - min_scale), 0.0, 1.0)
         norm_uint8 = (norm_field * 255.0).astype(np.uint8)
 
-        # Apply user's active colormap (JET, HOT, INFERNO, PLASMA)
+        # Apply active False-Color Colormap (JET, HOT, INFERNO, PLASMA)
         cmap_code = COLORMAP_MAP.get(self.settings.current_thermal_colormap, cv2.COLORMAP_JET)
         thermal_bgr = cv2.applyColorMap(norm_uint8, cmap_code)
 
-        # Check if any detected spot has a fever
+        # Check fever status
         fever_detected = any(s.is_fever for s in spots)
         primary_temp_f = (primary_temp * 9.0 / 5.0 + 32.0) if primary_temp is not None else None
 
         return ThermalFrameResult(
             thermal_bgr=thermal_bgr,
+            segmentation_mask=seg_mask,
             spots=spots,
             min_temp_c=min_scale,
             max_temp_c=max_scale,
@@ -251,8 +349,6 @@ class ThermalEngine:
         raw_16bit: np.ndarray,
     ) -> ThermalFrameResult:
         """Decodes raw 16-bit radiometric thermal sensor matrix."""
-        # Standard UVC thermal sensor: temperature in Kelvin x 100 or Celsius x 100
-        # Check median to determine if Kelvin (> 20000) or Celsius
         med_val = np.median(raw_16bit)
         if med_val > 10000:
             temp_c_matrix = (raw_16bit.astype(np.float32) / 100.0) - 273.15
@@ -269,6 +365,7 @@ class ThermalEngine:
 
         cmap_code = COLORMAP_MAP.get(self.settings.current_thermal_colormap, cv2.COLORMAP_JET)
         thermal_bgr = cv2.applyColorMap(norm_uint8, cmap_code)
+        seg_mask = self.generate_body_face_segmentation_mask(frame_bgr, detections)
 
         spots: List[TemperatureSpot] = []
         fever_thresh = self.settings.fever_threshold_c
@@ -298,6 +395,7 @@ class ThermalEngine:
 
         return ThermalFrameResult(
             thermal_bgr=thermal_bgr,
+            segmentation_mask=seg_mask,
             spots=spots,
             min_temp_c=min_scale,
             max_temp_c=max_scale,

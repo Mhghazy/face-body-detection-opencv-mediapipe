@@ -86,7 +86,7 @@ class FrameVisualizer:
 
         # 1. Apply Thermal Heatmap Overlay if active
         if self.settings.show_thermal and thermal_result is not None:
-            output = self._apply_thermal_overlay(output, thermal_result.thermal_bgr)
+            output = self._apply_thermal_overlay(output, thermal_result)
 
         # 2. Blend CV Edge Filter if active
         if self.settings.show_edge_filter and edge_overlay is not None:
@@ -134,22 +134,22 @@ class FrameVisualizer:
 
         return output
 
-    def _apply_thermal_overlay(self, frame: np.ndarray, thermal_bgr: np.ndarray) -> np.ndarray:
-        """Applies thermal color map based on configured blend mode."""
+    def _apply_thermal_overlay(self, frame: np.ndarray, thermal_result: ThermalFrameResult) -> np.ndarray:
+        """Applies thermal color map based on configured blend mode and segmentation mask."""
         blend_mode = self.settings.current_thermal_blend_mode
         alpha = self.settings.thermal_blend_alpha
+        thermal_bgr = thermal_result.thermal_bgr
 
         if blend_mode == "full":
             return thermal_bgr.copy()
         elif blend_mode == "hybrid":
             return cv2.addWeighted(frame, 1.0 - alpha, thermal_bgr, alpha, 0)
         elif blend_mode == "masked":
-            # Masked mode: soft blend in bright regions, subdued in background
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            mask = cv2.threshold(gray, 60, 255, cv2.THRESH_BINARY)[1]
-            mask_3c = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR).astype(np.float32) / 255.0
-            blended = cv2.addWeighted(frame, 1.0 - alpha, thermal_bgr, alpha, 0)
-            return (blended * mask_3c + frame * (1.0 - mask_3c)).astype(np.uint8)
+            # Masked mode: apply thermal false-color strictly to segmented body & face
+            seg_mask = thermal_result.segmentation_mask
+            mask_3c = np.repeat(seg_mask[:, :, np.newaxis], 3, axis=2)
+            blended_body = cv2.addWeighted(frame, 1.0 - alpha, thermal_bgr, alpha, 0)
+            return (blended_body * mask_3c + frame * (1.0 - mask_3c)).astype(np.uint8)
         return frame
 
     def _draw_temperature_spots(self, frame: np.ndarray, spots: List[TemperatureSpot]) -> None:
