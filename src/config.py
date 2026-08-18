@@ -166,6 +166,9 @@ HAND_CONNECTIONS = [
     (0, 17)                                # Palm base
 ]
 
+THERMAL_COLORMAPS = ["jet", "hot", "inferno", "plasma"]
+THERMAL_BLEND_MODES = ["hybrid", "full", "masked"]
+
 @dataclass
 class AppSettings:
     """Runtime toggles and configurations."""
@@ -181,6 +184,16 @@ class AppSettings:
     show_hud: bool = True
     theme_idx: int = 0
     flip_horizontal: bool = True
+    
+    # Thermal Camera & Temperature Detection Settings
+    show_thermal: bool = False
+    thermal_colormap_idx: int = 0      # index into THERMAL_COLORMAPS
+    thermal_blend_mode_idx: int = 0    # index into THERMAL_BLEND_MODES ("hybrid", "full", "masked")
+    thermal_blend_alpha: float = 0.65  # Alpha blending factor for thermal overlay
+    temp_unit: str = "C"               # "C" for Celsius, "F" for Fahrenheit
+    fever_threshold_c: float = 37.5    # Fever alert threshold in Celsius
+    thermal_mode_type: str = "sim"     # "sim" (webcam simulation) or "hw" (radiometric 16-bit USB)
+    
     face_mesh_alpha: float = 0.5
     edge_filter_alpha: float = 0.6
     min_detection_confidence: float = 0.5
@@ -197,6 +210,27 @@ class AppSettings:
     def current_theme(self) -> Dict[str, Tuple[int, int, int]]:
         return THEMES[self.current_theme_name]
     
+    @property
+    def current_thermal_colormap(self) -> str:
+        return THERMAL_COLORMAPS[self.thermal_colormap_idx % len(THERMAL_COLORMAPS)]
+        
+    @property
+    def current_thermal_blend_mode(self) -> str:
+        return THERMAL_BLEND_MODES[self.thermal_blend_mode_idx % len(THERMAL_BLEND_MODES)]
+    
     def cycle_theme(self) -> str:
         self.theme_idx = (self.theme_idx + 1) % len(THEME_NAMES)
         return self.current_theme_name
+
+    def cycle_thermal_colormap(self) -> str:
+        self.thermal_colormap_idx = (self.thermal_colormap_idx + 1) % len(THERMAL_COLORMAPS)
+        return self.current_thermal_colormap
+
+    def cycle_thermal_blend_mode(self) -> str:
+        self.thermal_blend_mode_idx = (self.thermal_blend_mode_idx + 1) % len(THERMAL_BLEND_MODES)
+        return self.current_thermal_blend_mode
+
+    def toggle_temp_unit(self) -> str:
+        self.temp_unit = "F" if self.temp_unit == "C" else "C"
+        return self.temp_unit
+

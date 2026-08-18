@@ -1,5 +1,5 @@
 """
-Automated Test Suite for Face & Body Vertices and Edges Detection System
+Automated Test Suite for Face & Body Vertices, Edges & Thermal Detection System
 """
 
 import unittest
@@ -7,7 +7,14 @@ from pathlib import Path
 import numpy as np
 import cv2
 
-from src.config import AppSettings, THEMES, THEME_NAMES, SNAPSHOTS_DIR
+from src.config import (
+    AppSettings,
+    THEMES,
+    THEME_NAMES,
+    THERMAL_COLORMAPS,
+    THERMAL_BLEND_MODES,
+    SNAPSHOTS_DIR,
+)
 from src.detector import (
     VisionDetector,
     VisionRunningMode,
@@ -18,11 +25,12 @@ from src.detector import (
     FrameDetections,
 )
 from src.edge_detector import EdgeDetector
+from src.thermal_engine import ThermalEngine, TemperatureSpot, ThermalFrameResult
 from src.visualizer import FrameVisualizer
 
 
 class TestDetectionPipeline(unittest.TestCase):
-    """Test suite verifying detector, edge filtering, and visualizer modules."""
+    """Test suite verifying detector, edge filtering, thermal engine, and visualizer modules."""
 
     def setUp(self):
         self.settings = AppSettings()
@@ -32,6 +40,39 @@ class TestDetectionPipeline(unittest.TestCase):
         self.test_frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
         cv2.circle(self.test_frame, (320, 180), 80, (200, 180, 160), -1)  # Head shape
         cv2.rectangle(self.test_frame, (260, 260), (380, 440), (120, 90, 80), -1)  # Torso shape
+
+        # Create dummy detections
+        face_lms = [
+            LandmarkPoint(x=0.5, y=0.3, z=0.0, px=320, py=150)
+            for _ in range(478)
+        ]
+        face_lms[10].px, face_lms[10].py = 320, 120  # Forehead
+        face_lms[151].px, face_lms[151].py = 320, 140
+        face_lms[33].px, face_lms[33].py = 300, 160  # Left eye canthus
+        face_lms[263].px, face_lms[263].py = 340, 160  # Right eye canthus
+
+        pose_lms = [
+            LandmarkPoint(x=0.5, y=0.5, z=0.0, px=320, py=240, visibility=0.9)
+            for _ in range(33)
+        ]
+        pose_lms[11].px, pose_lms[11].py = 280, 260  # Left shoulder
+        pose_lms[12].px, pose_lms[12].py = 360, 260  # Right shoulder
+        pose_lms[15].px, pose_lms[15].py = 230, 360  # Left wrist
+        pose_lms[16].px, pose_lms[16].py = 410, 360  # Right wrist
+        pose_lms[23].px, pose_lms[23].py = 290, 380  # Left hip
+        pose_lms[24].px, pose_lms[24].py = 350, 380  # Right hip
+
+        hand_lms = [
+            LandmarkPoint(x=0.2, y=0.5, z=0.0, px=150, py=250)
+            for _ in range(21)
+        ]
+
+        self.sample_detections = FrameDetections(
+            faces=[DetectedFace(landmarks=face_lms)],
+            poses=[DetectedPose(landmarks=pose_lms)],
+            hands=[DetectedHand(landmarks=hand_lms)],
+            inference_time_ms=12.5,
+        )
 
     def test_edge_detector_canny_and_sobel(self):
         """Verify Canny and Sobel edge detection."""
@@ -60,37 +101,8 @@ class TestDetectionPipeline(unittest.TestCase):
     def test_visualizer_rendering(self):
         """Verify rendering of face vertices, mesh edges, pose limbs, and HUD."""
         visualizer = FrameVisualizer(self.settings)
-
-        # Create dummy detections to test rendering routines
-        face_lms = [
-            LandmarkPoint(x=0.5 + 0.05 * np.cos(t), y=0.3 + 0.05 * np.sin(t), z=0.0,
-                          px=int(320 + 30 * np.cos(t)), py=int(150 + 30 * np.sin(t)))
-            for t in np.linspace(0, 2 * np.pi, 478)
-        ]
-        pose_lms = [
-            LandmarkPoint(x=0.5, y=0.5, z=0.0, px=320, py=240, visibility=0.9)
-            for _ in range(33)
-        ]
-        # Distribute a few pose joints
-        pose_lms[11].px, pose_lms[11].py = 280, 260  # Left shoulder
-        pose_lms[12].px, pose_lms[12].py = 360, 260  # Right shoulder
-        pose_lms[23].px, pose_lms[23].py = 290, 380  # Left hip
-        pose_lms[24].px, pose_lms[24].py = 350, 380  # Right hip
-
-        hand_lms = [
-            LandmarkPoint(x=0.2, y=0.5, z=0.0, px=150, py=250)
-            for _ in range(21)
-        ]
-
-        detections = FrameDetections(
-            faces=[DetectedFace(landmarks=face_lms)],
-            poses=[DetectedPose(landmarks=pose_lms)],
-            hands=[DetectedHand(landmarks=hand_lms)],
-            inference_time_ms=12.5,
-        )
-
         visualizer.update_fps(30.0)
-        rendered = visualizer.render(self.test_frame, detections)
+        rendered = visualizer.render(self.test_frame, self.sample_detections)
         self.assertEqual(rendered.shape, (self.height, self.width, 3))
 
         # Save test output
@@ -117,6 +129,70 @@ class TestDetectionPipeline(unittest.TestCase):
             self.settings.cycle_theme()
         self.assertEqual(self.settings.current_theme_name, initial_name)
 
+    def test_thermal_engine_simulation_and_spots(self):
+        """Verify ThermalEngine computes thermal heatmap and realistic spot temperatures."""
+        thermal_engine = ThermalEngine(self.settings)
+        result = thermal_engine.process(self.test_frame, self.sample_detections)
+
+        self.assertIsInstance(result, ThermalFrameResult)
+        self.assertEqual(result.thermal_bgr.shape, (self.height, self.width, 3))
+        self.assertGreater(len(result.spots), 0)
+
+        # Check forehead and chest spots
+        spot_labels = [s.label for s in result.spots]
+        self.assertIn("Forehead", spot_labels)
+        self.assertIn("Core Chest", spot_labels)
+
+        # Temperatures should be within normal human range
+        forehead_spot = next(s for s in result.spots if s.label == "Forehead")
+        self.assertGreaterEqual(forehead_spot.temp_c, 35.0)
+        self.assertLessEqual(forehead_spot.temp_c, 40.0)
+
+        # Test Fahrenheit conversion
+        expected_f = (forehead_spot.temp_c * 9.0 / 5.0) + 32.0
+        self.assertAlmostEqual(forehead_spot.temp_f, expected_f, places=1)
+
+    def test_thermal_fever_detection(self):
+        """Verify fever threshold triggers fever alert flags."""
+        self.settings.fever_threshold_c = 36.0  # Set low threshold to trigger fever flag
+        thermal_engine = ThermalEngine(self.settings)
+        result = thermal_engine.process(self.test_frame, self.sample_detections)
+
+        self.assertTrue(result.fever_detected)
+        fever_spots = [s for s in result.spots if s.is_fever]
+        self.assertGreater(len(fever_spots), 0)
+
+    def test_thermal_colormaps_and_blend_modes(self):
+        """Verify all thermal colormaps and blend modes execute without error."""
+        thermal_engine = ThermalEngine(self.settings)
+        visualizer = FrameVisualizer(self.settings)
+        self.settings.show_thermal = True
+
+        for cmap in THERMAL_COLORMAPS:
+            self.settings.thermal_colormap_idx = THERMAL_COLORMAPS.index(cmap)
+            self.assertEqual(self.settings.current_thermal_colormap, cmap)
+            result = thermal_engine.process(self.test_frame, self.sample_detections)
+            self.assertEqual(result.thermal_bgr.shape, (self.height, self.width, 3))
+
+            for blend_mode in THERMAL_BLEND_MODES:
+                self.settings.thermal_blend_mode_idx = THERMAL_BLEND_MODES.index(blend_mode)
+                self.assertEqual(self.settings.current_thermal_blend_mode, blend_mode)
+                rendered = visualizer.render(
+                    self.test_frame,
+                    self.sample_detections,
+                    thermal_result=result,
+                    thermal_engine=thermal_engine,
+                )
+                self.assertEqual(rendered.shape, (self.height, self.width, 3))
+
+    def test_thermal_scale_legend_drawing(self):
+        """Verify vertical thermal scale legend draws onto frame."""
+        thermal_engine = ThermalEngine(self.settings)
+        frame_copy = self.test_frame.copy()
+        thermal_engine.draw_thermal_scale_legend(frame_copy, min_temp_c=20.0, max_temp_c=40.0)
+        # Verify frame was modified
+        self.assertFalse(np.array_equal(frame_copy, self.test_frame))
+
     def test_detector_initialization_and_inference(self):
         """Verify VisionDetector initialization and execution on static image."""
         frame_rgb = cv2.cvtColor(self.test_frame, cv2.COLOR_BGR2RGB)
@@ -135,16 +211,13 @@ class TestDetectionPipeline(unittest.TestCase):
         """Verify VisionDetector in VIDEO mode correctly handles sequential and duplicate timestamps."""
         frame_rgb = cv2.cvtColor(self.test_frame, cv2.COLOR_BGR2RGB)
         with VisionDetector(settings=self.settings, running_mode=VisionRunningMode.VIDEO) as detector:
-            # Send sequential frames
             d1 = detector.process_frame(frame_rgb, timestamp_ms=33)
             self.assertIsInstance(d1, FrameDetections)
             self.assertGreater(d1.inference_time_ms, 0.0)
 
-            # Test duplicate timestamp - should be handled by monotonic guard without raising error
             d2 = detector.process_frame(frame_rgb, timestamp_ms=33)
             self.assertIsInstance(d2, FrameDetections)
 
-            # Next normal frame
             d3 = detector.process_frame(frame_rgb, timestamp_ms=66)
             self.assertIsInstance(d3, FrameDetections)
 

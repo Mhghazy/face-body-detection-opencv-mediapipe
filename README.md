@@ -1,6 +1,11 @@
-# Lumina CV - Face and Body Vertices & Edges Detection System
+# Lumina CV - Face and Body Vertices, Edges & Thermal Vision System
 
-An advanced, real-time Computer Vision system built with **MediaPipe (Tasks Vision API)** and **OpenCV** to detect, analyze, and visualize facial vertices (landmarks) & wireframe edges, body pose skeleton vertices & limb edges, and hand keypoints.
+An advanced, real-time Computer Vision system built with **MediaPipe (Tasks Vision API)** and **OpenCV** to detect, analyze, and visualize:
+- Facial vertices (landmarks) & wireframe edges
+- Body pose skeleton vertices & limb edges
+- Hand keypoints & finger kinematics
+- **Thermal Heatmap Visualization & Body Temperature Monitoring** (Simulated Bio-Physiological & Hardware Radiometric)
+- Classical CV Edge Filters (Canny & Sobel)
 
 ---
 
@@ -9,11 +14,18 @@ An advanced, real-time Computer Vision system built with **MediaPipe (Tasks Visi
 - **478 Facial Vertices & Mesh Edges**: High-density 3D face mesh tessellation, iris tracking, and outline contours (lips, eyes, eyebrows, jawline).
 - **33 Body Pose Vertices & Skeleton Edges**: Full-body kinematic tracking with color-coded lateral symmetry (left side, right side, core torso).
 - **21 Hand Keypoint Vertices & Kinematic Chains**: Fingertip joint accents and palm base connectivity.
+- **Thermal Heatmap & Body Temperature Monitoring**:
+  - **Bio-Physiological Simulation**: Synthesizes continuous Gaussian heat diffusion fields with realistic core body temperatures (~36.4°C–37.2°C) and micro-perfusion fluctuations.
+  - **Hardware Radiometric Support**: Ingests raw 16-bit radiometric thermal sensor frames from standard UVC thermal cameras.
+  - **Spot Temperature Badges**: Anchors floating temperature tags to the forehead (clinical surrogate), core chest, and hands.
+  - **Multi-Palette Colormaps**: `JET`, `HOT`, `INFERNO`, and `PLASMA`.
+  - **Blend Styles**: `Hybrid` overlay (thermal + wireframe), `Full Thermal`, and `Masked`.
+  - **Fever Alert System**: Detects elevated temperatures exceeding configurable threshold (e.g. >37.5°C) with flashing alerts.
+  - **Thermal Scale Legend Bar**: Vertical gradient calibration bar with min/max scale markers.
 - **Classical Computer Vision Edge Filters**: Integrated OpenCV Canny and Sobel edge detection overlay with adaptive thresholding.
 - **Visual Themes & Neon Glow**: 4 themes (`cyberpunk`, `scifi_emerald`, `sunset_fire`, `minimal_mono`) with translucent vertex glow nodes.
-- **Interactive Real-Time HUD**: Real-time FPS counter, inference latency telemetry, active detector statuses, mirror state, and keyboard shortcuts guide.
+- **Interactive Real-Time HUD**: Real-time FPS counter, inference latency telemetry, thermal status, mirror state, and keyboard shortcuts guide.
 - **Zero Setup / Auto-Downloader**: Automatically downloads and verifies required MediaPipe `.task` models on first run.
-- **Camera Orientation**: Default is **unflipped** (raw camera feed preserved as requested), with an interactive toggle `M` to flip/mirror if ever needed.
 - **Snapshot & Recording**: Save high-res screenshots (`SPACE`) or record live video feeds (`R`).
 
 ---
@@ -34,29 +46,34 @@ pip install -r requirements.txt
 
 ## Quickstart
 
-### 1. Launch with Default Webcam (Flipped / Mirrored by default)
+### 1. Launch with Default Webcam (Flipped / Mirrored)
 ```bash
 python main.py
 ```
 
-### 2. Launch with Webcam Unflipped (Raw camera orientation)
+### 2. Launch with Thermal Heatmap & Body Temperature Monitoring
+```bash
+python main.py --thermal --thermal-colormap jet --thermal-blend hybrid
+```
+
+### 3. Launch with Temperature in Fahrenheit
+```bash
+python main.py --thermal --temp-unit F
+```
+
+### 4. Launch with Webcam Unflipped (Raw camera orientation)
 ```bash
 python main.py --no-flip
 ```
 
-### 3. Launch with a Specific Video File
+### 5. Launch with a Specific Video File
 ```bash
 python main.py --source path/to/video.mp4
 ```
 
-### 4. Process a Static Image
+### 6. Process a Static Image
 ```bash
-python main.py --source path/to/photo.jpg --theme cyberpunk
-```
-
-### 5. Enable Classical Edge Filter on Startup
-```bash
-python main.py --edge-filter --filter-type canny --theme scifi_emerald
+python main.py --source path/to/photo.jpg --thermal --theme cyberpunk
 ```
 
 ---
@@ -65,6 +82,11 @@ python main.py --edge-filter --filter-type canny --theme scifi_emerald
 
 | Key | Action |
 |---|---|
+| `U` | **Toggle Thermal Vision & Temperature Detection** |
+| `O` | **Cycle Thermal Colormap** (`Jet` $\to$ `Hot` $\to$ `Inferno` $\to$ `Plasma`) |
+| `K` | **Cycle Thermal Blend Mode** (`Hybrid` $\to$ `Full` $\to$ `Masked`) |
+| `I` | **Toggle Temperature Units** (`°C` $\leftrightarrow$ `°F`) |
+| `[` / `]` | **Adjust Fever Alert Threshold** ($-0.2^\circ\text{C}$ / $+0.2^\circ\text{C}$) |
 | `F` | Toggle Face Mesh Wireframe & Vertices |
 | `B` or `P` | Toggle Body Pose Skeleton Limbs & Joint Vertices |
 | `H` | Toggle Hand Keypoints & Finger Kinematics |
@@ -85,9 +107,12 @@ python main.py --edge-filter --filter-type canny --theme scifi_emerald
 ```text
 usage: main.py [-h] [--source SOURCE] [--mode {all,face,pose,hands}]
                [--theme {cyberpunk,scifi_emerald,sunset_fire,minimal_mono}]
+               [--thermal] [--thermal-colormap {jet,hot,inferno,plasma}]
+               [--thermal-blend {hybrid,full,masked}] [--temp-unit {C,F}]
+               [--fever-threshold FEVER_THRESHOLD] [--thermal-type {sim,hw}]
                [--edge-filter] [--filter-type {canny,sobel}]
                [--no-glow] [--no-hud] [--width WIDTH] [--height HEIGHT]
-               [--save SAVE] [--headless] [--confidence CONFIDENCE]
+               [--save SAVE] [--no-flip] [--headless] [--confidence CONFIDENCE]
 
 Options:
   --source SOURCE       Camera index (e.g. '0'), video file path, or image path.
@@ -95,6 +120,16 @@ Options:
                         Target detection mode (default: 'all').
   --theme {cyberpunk,scifi_emerald,sunset_fire,minimal_mono}
                         Initial visual theme.
+  --thermal             Enable thermal heatmap and body temperature detection.
+  --thermal-colormap {jet,hot,inferno,plasma}
+                        Thermal false-color palette.
+  --thermal-blend {hybrid,full,masked}
+                        Thermal overlay blending style.
+  --temp-unit {C,F}     Temperature unit ('C' or 'F').
+  --fever-threshold FEVER_THRESHOLD
+                        Fever warning temperature threshold in Celsius (default: 37.5).
+  --thermal-type {sim,hw}
+                        Thermal mode: 'sim' (physiological simulation) or 'hw' (radiometric USB).
   --edge-filter         Enable classical edge overlay.
   --filter-type {canny,sobel}
                         Type of edge filter.
@@ -103,6 +138,7 @@ Options:
   --width WIDTH         Webcam width resolution (default: 1280).
   --height HEIGHT       Webcam height resolution (default: 720).
   --save SAVE           Path to save output video/image.
+  --no-flip             Disable camera horizontal mirror/flip.
   --headless            Run without GUI window (for testing/batch).
   --confidence CONFIDENCE
                         Confidence threshold [0.0 - 1.0].
@@ -121,10 +157,11 @@ face detection project/
 ├── snapshots/                  # Saved screenshots & recordings
 ├── src/
 │   ├── __init__.py
-│   ├── config.py               # Theme palettes, topology graphs, and settings
+│   ├── config.py               # Theme palettes, thermal constants, and settings
 │   ├── downloader.py           # Auto-download manager with progress tracking
 │   ├── detector.py             # MediaPipe Tasks Vision wrapper (Face, Pose, Hand)
-│   ├── visualizer.py           # OpenCV wireframe, vertex rendering, glow & HUD
+│   ├── thermal_engine.py       # Thermal simulation, hotspot sampling & radiometric decoding
+│   ├── visualizer.py           # Wireframe, thermal overlays, temperature badges, scale bar & HUD
 │   └── edge_detector.py        # Classical CV Canny/Sobel algorithms
 ├── tests/
 │   └── test_pipeline.py        # Automated test suite

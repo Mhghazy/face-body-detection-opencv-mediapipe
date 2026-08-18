@@ -1,7 +1,7 @@
 """
 Main Application Entry Point
 Face and Body Vertices & Edges Detection System
-Using Google MediaPipe and OpenCV.
+Using Google MediaPipe and OpenCV with Thermal Heatmap & Body Temperature Monitoring.
 """
 
 import argparse
@@ -13,16 +13,24 @@ from typing import Optional, Union
 import cv2
 import numpy as np
 
-from src.config import AppSettings, THEMES, THEME_NAMES, SNAPSHOTS_DIR
+from src.config import (
+    AppSettings,
+    THEMES,
+    THEME_NAMES,
+    THERMAL_COLORMAPS,
+    THERMAL_BLEND_MODES,
+    SNAPSHOTS_DIR,
+)
 from src.detector import VisionDetector, VisionRunningMode
 from src.edge_detector import EdgeDetector
+from src.thermal_engine import ThermalEngine
 from src.visualizer import FrameVisualizer
 
 
 def parse_arguments() -> argparse.Namespace:
     """Parses command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Lumina CV - Real-time Face & Body Vertices and Edges Detection System"
+        description="Lumina CV - Real-time Face & Body Vertices, Edges & Thermal Temperature Monitoring"
     )
     parser.add_argument(
         "--source",
@@ -43,6 +51,45 @@ def parse_arguments() -> argparse.Namespace:
         choices=THEME_NAMES,
         default="cyberpunk",
         help="Initial visual theme palette.",
+    )
+    parser.add_argument(
+        "--thermal",
+        action="store_true",
+        help="Enable thermal heatmap and body temperature detection on startup.",
+    )
+    parser.add_argument(
+        "--thermal-colormap",
+        type=str,
+        choices=THERMAL_COLORMAPS,
+        default="jet",
+        help="Thermal false-color palette ('jet', 'hot', 'inferno', 'plasma').",
+    )
+    parser.add_argument(
+        "--thermal-blend",
+        type=str,
+        choices=THERMAL_BLEND_MODES,
+        default="hybrid",
+        help="Thermal overlay blending style ('hybrid', 'full', 'masked').",
+    )
+    parser.add_argument(
+        "--temp-unit",
+        type=str,
+        choices=["C", "F"],
+        default="C",
+        help="Temperature unit to display ('C' for Celsius, 'F' for Fahrenheit).",
+    )
+    parser.add_argument(
+        "--fever-threshold",
+        type=float,
+        default=37.5,
+        help="Fever warning temperature threshold in Celsius (default: 37.5).",
+    )
+    parser.add_argument(
+        "--thermal-type",
+        type=str,
+        choices=["sim", "hw"],
+        default="sim",
+        help="Thermal camera mode: 'sim' (physiological simulation) or 'hw' (radiometric USB).",
     )
     parser.add_argument(
         "--edge-filter",
@@ -118,6 +165,7 @@ def process_static_image(
 
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     edge_engine = EdgeDetector()
+    thermal_engine = ThermalEngine(settings)
     visualizer = FrameVisualizer(settings)
 
     print("Running MediaPipe Face & Body landmark inference...")
@@ -140,14 +188,26 @@ def process_static_image(
                 edge_mask, color=settings.current_theme["edge_filter"]
             )
 
+        thermal_result = None
+        if settings.show_thermal:
+            thermal_result = thermal_engine.process(frame, detections)
+
         visualizer.update_fps(30.0)
-        annotated = visualizer.render(frame, detections, edge_overlay)
+        annotated = visualizer.render(
+            frame=frame,
+            detections=detections,
+            edge_overlay=edge_overlay,
+            thermal_result=thermal_result,
+            thermal_engine=thermal_engine,
+        )
 
     # Save if requested
     out_file = save_path or str(SNAPSHOTS_DIR / f"processed_{image_path.name}")
     cv2.imwrite(out_file, annotated)
     print(f"[Success] Processed image saved to: {out_file}")
     print(f"Detected: {len(detections.faces)} face(s), {len(detections.poses)} body pose(s), {len(detections.hands)} hand(s)")
+    if thermal_result and thermal_result.primary_temp_c:
+        print(f"Primary Temperature: {thermal_result.primary_temp_c:.1f}°C ({thermal_result.primary_temp_f:.1f}°F)")
 
     if not headless:
         cv2.imshow("Face & Body Vertices & Edges (Press any key to close)", annotated)
@@ -181,6 +241,7 @@ def run_video_stream(
     print(f"[Info] Video stream opened: {actual_w}x{actual_h} @ {fps_in:.1f} FPS")
 
     edge_engine = EdgeDetector()
+    thermal_engine = ThermalEngine(settings)
     visualizer = FrameVisualizer(settings)
 
     # Video Writer for recording
@@ -196,7 +257,7 @@ def run_video_stream(
     print("[Info] Initializing MediaPipe Vision Engine...")
     detector = VisionDetector(settings=settings, running_mode=VisionRunningMode.VIDEO)
 
-    window_name = "Face & Body Vertices & Edges Detection - Lumina CV"
+    window_name = "Face & Body Vertices, Edges & Thermal Temperature - Lumina CV"
     if not headless:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(window_name, min(actual_w, 1280), min(actual_h, 720))
@@ -206,21 +267,26 @@ def run_video_stream(
     prev_time = time.time()
     last_timestamp_ms = -1
 
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 65)
     print(" INTERACTIVE KEYBOARD CONTROLS:")
+    print("  [U] Toggle Thermal Vision & Body Temperature Detection")
+    print("  [O] Cycle Thermal Colormap (Jet -> Hot -> Inferno -> Plasma)")
+    print("  [K] Cycle Thermal Blend Mode (Hybrid -> Full -> Masked)")
+    print("  [I] Toggle Temperature Units (°C <-> °F)")
+    print("  [ [ / ] ] Adjust Fever Alert Threshold (-0.2°C / +0.2°C)")
     print("  [F] Toggle Face Mesh (Wireframe & Vertices)")
     print("  [B] Toggle Body Skeleton (Pose Limbs & Joints)")
     print("  [H] Toggle Hands & Fingers")
     print("  [E] Toggle Classical OpenCV Edge Detection Filter")
     print("  [C] Cycle Edge Filter Type (Canny / Sobel)")
-    print("  [M] Toggle Camera Mirror / Flip (Default: OFF - Unflipped)")
+    print("  [M] Toggle Camera Mirror / Flip (Default: ON - Flipped)")
     print("  [T] Cycle Visual Theme (Cyberpunk/Emerald/Sunset/Mono)")
     print("  [G] Toggle Glowing Joint Vertices")
     print("  [TAB] / [D] Toggle Telemetry HUD Card")
     print("  [SPACE] Save Snapshot Screenshot")
     print("  [R] Toggle Video Recording to snapshots/")
     print("  [Q] / [ESC] Quit Application")
-    print("=" * 60 + "\n")
+    print("=" * 65 + "\n")
 
     try:
         while True:
@@ -231,7 +297,7 @@ def run_video_stream(
                     print("[Info] End of video stream.")
                 break
 
-            # Explicitly do NOT flip by default; only flip if flip_horizontal is True
+            # Horizontally flip frame if enabled (default True)
             if settings.flip_horizontal:
                 frame = cv2.flip(frame, 1)
 
@@ -250,9 +316,9 @@ def run_video_stream(
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             # Determine what to detect
-            detect_face = settings.show_face_mesh or settings.show_face_vertices or settings.show_face_contours
-            detect_pose = settings.show_pose_skeleton or settings.show_pose_vertices
-            detect_hands = settings.show_hands
+            detect_face = settings.show_face_mesh or settings.show_face_vertices or settings.show_face_contours or settings.show_thermal
+            detect_pose = settings.show_pose_skeleton or settings.show_pose_vertices or settings.show_thermal
+            detect_hands = settings.show_hands or settings.show_thermal
 
             detections = detector.process_frame(
                 frame_rgb=frame_rgb,
@@ -273,8 +339,20 @@ def run_video_stream(
                     edge_mask, color=settings.current_theme["edge_filter"]
                 )
 
+            # Thermal Heatmap & Spot Temperatures
+            thermal_result = None
+            if settings.show_thermal:
+                thermal_result = thermal_engine.process(frame, detections)
+
             # Render Visualizations
-            annotated = visualizer.render(frame, detections, edge_overlay, is_recording=is_recording)
+            annotated = visualizer.render(
+                frame=frame,
+                detections=detections,
+                edge_overlay=edge_overlay,
+                thermal_result=thermal_result,
+                thermal_engine=thermal_engine,
+                is_recording=is_recording,
+            )
 
             # Save recording frame
             if is_recording and video_writer is not None:
@@ -290,6 +368,24 @@ def run_video_stream(
                 if key in (ord("q"), ord("Q"), 27):  # Q or ESC
                     print("[Info] Quitting application...")
                     break
+                elif key in (ord("u"), ord("U")):
+                    settings.show_thermal = not settings.show_thermal
+                    print(f"Thermal Vision: {'ON' if settings.show_thermal else 'OFF'}")
+                elif key in (ord("o"), ord("O")):
+                    new_cmap = settings.cycle_thermal_colormap()
+                    print(f"Thermal Colormap: {new_cmap.upper()}")
+                elif key in (ord("k"), ord("K")):
+                    new_blend = settings.cycle_thermal_blend_mode()
+                    print(f"Thermal Blend Mode: {new_blend.upper()}")
+                elif key in (ord("i"), ord("I")):
+                    new_unit = settings.toggle_temp_unit()
+                    print(f"Temperature Unit: °{new_unit}")
+                elif key == ord("["):
+                    settings.fever_threshold_c = max(35.0, round(settings.fever_threshold_c - 0.2, 1))
+                    print(f"Fever Alert Threshold: {settings.fever_threshold_c:.1f}°C")
+                elif key == ord("]"):
+                    settings.fever_threshold_c = min(42.0, round(settings.fever_threshold_c + 0.2, 1))
+                    print(f"Fever Alert Threshold: {settings.fever_threshold_c:.1f}°C")
                 elif key in (ord("f"), ord("F")):
                     settings.show_face_mesh = not settings.show_face_mesh
                     settings.show_face_vertices = settings.show_face_mesh
@@ -369,6 +465,10 @@ def main() -> None:
         show_pose_skeleton=(args.mode in ["all", "pose"]),
         show_pose_vertices=(args.mode in ["all", "pose"]),
         show_hands=(args.mode in ["all", "hands"]),
+        show_thermal=args.thermal,
+        temp_unit=args.temp_unit,
+        fever_threshold_c=args.fever_threshold,
+        thermal_mode_type=args.thermal_type,
         show_edge_filter=args.edge_filter,
         edge_filter_type=args.filter_type,
         flip_horizontal=not args.no_flip,
@@ -380,6 +480,12 @@ def main() -> None:
 
     if args.theme in THEME_NAMES:
         settings.theme_idx = THEME_NAMES.index(args.theme)
+
+    if args.thermal_colormap in THERMAL_COLORMAPS:
+        settings.thermal_colormap_idx = THERMAL_COLORMAPS.index(args.thermal_colormap)
+
+    if args.thermal_blend in THERMAL_BLEND_MODES:
+        settings.thermal_blend_mode_idx = THERMAL_BLEND_MODES.index(args.thermal_blend)
 
     # Determine source type
     src_str = args.source.strip()
