@@ -24,6 +24,7 @@ from src.config import (
 from src.detector import VisionDetector, VisionRunningMode
 from src.edge_detector import EdgeDetector
 from src.thermal_engine import ThermalEngine
+from src.rppg import RPPGDetector, RPPGResult
 from src.visualizer import FrameVisualizer
 
 
@@ -56,6 +57,11 @@ def parse_arguments() -> argparse.Namespace:
         "--thermal",
         action="store_true",
         help="Enable thermal heatmap and body temperature detection on startup.",
+    )
+    parser.add_argument(
+        "--rppg",
+        action="store_true",
+        help="Enable contactless heart-rate (rPPG) estimation and pulse waveform on startup.",
     )
     parser.add_argument(
         "--thermal-colormap",
@@ -166,6 +172,7 @@ def process_static_image(
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     edge_engine = EdgeDetector()
     thermal_engine = ThermalEngine(settings)
+    rppg_detector = RPPGDetector(settings)
     visualizer = FrameVisualizer(settings)
 
     print("Running MediaPipe Face & Body landmark inference...")
@@ -173,7 +180,7 @@ def process_static_image(
         detections = detector.process_frame(
             frame_rgb=frame_rgb,
             timestamp_ms=0,
-            detect_face=settings.show_face_mesh or settings.show_face_vertices,
+            detect_face=settings.show_face_mesh or settings.show_face_vertices or settings.show_rppg,
             detect_pose=settings.show_pose_skeleton or settings.show_pose_vertices,
             detect_hands=settings.show_hands,
         )
@@ -192,6 +199,10 @@ def process_static_image(
         if settings.show_thermal:
             thermal_result = thermal_engine.process(frame, detections)
 
+        rppg_result = None
+        if settings.show_rppg:
+            rppg_result = rppg_detector.process(frame, detections)
+
         visualizer.update_fps(30.0)
         annotated = visualizer.render(
             frame=frame,
@@ -199,6 +210,7 @@ def process_static_image(
             edge_overlay=edge_overlay,
             thermal_result=thermal_result,
             thermal_engine=thermal_engine,
+            rppg_result=rppg_result,
         )
 
     # Save if requested
@@ -242,6 +254,7 @@ def run_video_stream(
 
     edge_engine = EdgeDetector()
     thermal_engine = ThermalEngine(settings)
+    rppg_detector = RPPGDetector(settings)
     visualizer = FrameVisualizer(settings)
 
     # Video Writer for recording
@@ -257,7 +270,7 @@ def run_video_stream(
     print("[Info] Initializing MediaPipe Vision Engine...")
     detector = VisionDetector(settings=settings, running_mode=VisionRunningMode.VIDEO)
 
-    window_name = "Face & Body Vertices, Edges & Thermal Temperature - Lumina CV"
+    window_name = "Face & Body Vertices, Edges, Thermal & Heart-Rate - Lumina CV"
     if not headless:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(window_name, min(actual_w, 1280), min(actual_h, 720))
@@ -269,6 +282,7 @@ def run_video_stream(
 
     print("\n" + "=" * 65)
     print(" INTERACTIVE KEYBOARD CONTROLS:")
+    print("  [V] Toggle Contactless Heart-Rate Estimation (rPPG) & Pulse Wave")
     print("  [U] Toggle Thermal Vision & Body Temperature Detection")
     print("  [O] Cycle Thermal Colormap (Jet -> Hot -> Inferno -> Plasma)")
     print("  [K] Cycle Thermal Blend Mode (Hybrid -> Full -> Masked)")
@@ -316,7 +330,13 @@ def run_video_stream(
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             # Determine what to detect
-            detect_face = settings.show_face_mesh or settings.show_face_vertices or settings.show_face_contours or settings.show_thermal
+            detect_face = (
+                settings.show_face_mesh
+                or settings.show_face_vertices
+                or settings.show_face_contours
+                or settings.show_thermal
+                or settings.show_rppg
+            )
             detect_pose = settings.show_pose_skeleton or settings.show_pose_vertices or settings.show_thermal
             detect_hands = settings.show_hands or settings.show_thermal
 
@@ -344,6 +364,11 @@ def run_video_stream(
             if settings.show_thermal:
                 thermal_result = thermal_engine.process(frame, detections)
 
+            # Remote Photoplethysmography (rPPG) Pulse Extraction
+            rppg_result = None
+            if settings.show_rppg:
+                rppg_result = rppg_detector.process(frame, detections)
+
             # Render Visualizations
             annotated = visualizer.render(
                 frame=frame,
@@ -351,6 +376,7 @@ def run_video_stream(
                 edge_overlay=edge_overlay,
                 thermal_result=thermal_result,
                 thermal_engine=thermal_engine,
+                rppg_result=rppg_result,
                 is_recording=is_recording,
             )
 
@@ -368,6 +394,11 @@ def run_video_stream(
                 if key in (ord("q"), ord("Q"), 27):  # Q or ESC
                     print("[Info] Quitting application...")
                     break
+                elif key in (ord("v"), ord("V")):
+                    settings.show_rppg = not settings.show_rppg
+                    if not settings.show_rppg:
+                        rppg_detector.reset()
+                    print(f"Heart Rate (rPPG): {'ON' if settings.show_rppg else 'OFF'}")
                 elif key in (ord("u"), ord("U")):
                     settings.show_thermal = not settings.show_thermal
                     print(f"Thermal Vision: {'ON' if settings.show_thermal else 'OFF'}")
@@ -466,6 +497,7 @@ def main() -> None:
         show_pose_vertices=(args.mode in ["all", "pose"]),
         show_hands=(args.mode in ["all", "hands"]),
         show_thermal=args.thermal,
+        show_rppg=args.rppg,
         temp_unit=args.temp_unit,
         fever_threshold_c=args.fever_threshold,
         thermal_mode_type=args.thermal_type,

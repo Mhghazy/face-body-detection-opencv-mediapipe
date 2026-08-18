@@ -194,6 +194,13 @@ class AppSettings:
     fever_threshold_c: float = 37.5    # Fever alert threshold in Celsius
     thermal_mode_type: str = "sim"     # "sim" (webcam simulation) or "hw" (radiometric 16-bit USB)
     
+    # Remote Photoplethysmography (rPPG) Heart-Rate Settings
+    show_rppg: bool = False
+    rppg_buffer_size: int = 180        # Signal buffer length (~6 seconds at 30 fps)
+    rppg_show_graph: bool = True       # Display pulse waveform graph
+    rppg_min_bpm: float = 45.0         # Physiological lower bound
+    rppg_max_bpm: float = 180.0        # Physiological upper bound
+    
     face_mesh_alpha: float = 0.5
     edge_filter_alpha: float = 0.6
     min_detection_confidence: float = 0.5
@@ -233,4 +240,9 @@ class AppSettings:
     def toggle_temp_unit(self) -> str:
         self.temp_unit = "F" if self.temp_unit == "C" else "C"
         return self.temp_unit
+
+    def toggle_rppg(self) -> bool:
+        self.show_rppg = not self.show_rppg
+        return self.show_rppg
+
 
