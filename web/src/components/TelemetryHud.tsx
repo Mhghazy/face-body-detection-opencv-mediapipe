@@ -24,7 +24,7 @@ interface TelemetryHudProps {
   glowEnabled: boolean;
 }
 
-export const TelemetryHud: React.FC<TelemetryHudProps> = ({
+const TelemetryHudComponent: React.FC<TelemetryHudProps> = ({
   fps,
   inferenceMs,
   faceCount,
@@ -182,3 +182,5 @@ export const TelemetryHud: React.FC<TelemetryHudProps> = ({
     </div>
   );
 };
+
+export const TelemetryHud = React.memo(TelemetryHudComponent);

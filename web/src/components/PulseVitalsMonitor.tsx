@@ -11,7 +11,7 @@ interface PulseVitalsMonitorProps {
   onToggle: () => void;
 }
 
-export const PulseVitalsMonitor: React.FC<PulseVitalsMonitorProps> = ({
+const PulseVitalsMonitorComponent: React.FC<PulseVitalsMonitorProps> = ({
   vitals,
   enabled,
   onToggle,
@@ -207,3 +207,5 @@ export const PulseVitalsMonitor: React.FC<PulseVitalsMonitorProps> = ({
     </div>
   );
 };
+
+export const PulseVitalsMonitor = React.memo(PulseVitalsMonitorComponent);

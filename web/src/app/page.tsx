@@ -148,20 +148,39 @@ export default function Home() {
     setSnapshots((prev) => prev.filter((s) => s.id !== id));
   };
 
+  // Memoized Action Callbacks
+  const handleToggleFace = useCallback(() => setShowFace((v) => !v), []);
+  const handleTogglePose = useCallback(() => setShowPose((v) => !v), []);
+  const handleToggleHands = useCallback(() => setShowHands((v) => !v), []);
+  const handleToggleGlow = useCallback(() => setShowGlow((v) => !v), []);
+  const handleToggleMirror = useCallback(() => setIsMirrored((v) => !v), []);
+  const handleToggleHud = useCallback(() => setShowHud((v) => !v), []);
+  const handleToggleRppg = useCallback(() => setRppgEnabled((v) => !v), []);
+  const handleToggleRecording = useCallback(() => setIsRecording((v) => !v), []);
+  const handleStopRecording = useCallback(() => setIsRecording(false), []);
+  const handleToggleThermal = useCallback(
+    () => setThermalState((s) => ({ ...s, enabled: !s.enabled })),
+    []
+  );
+  const handleToggleEdges = useCallback(
+    () => setEdgeState((s) => ({ ...s, enabled: !s.enabled })),
+    []
+  );
+
   // Fullscreen toggle
-  const toggleFullscreen = () => {
+  const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen().then(() => setIsFullscreen(true));
     } else {
       document.exitFullscreen().then(() => setIsFullscreen(false));
     }
-  };
+  }, []);
 
   // Mute audio toggle
-  const toggleMute = () => {
+  const toggleMute = useCallback(() => {
     const muted = soundSynth.toggleMute();
     setIsMuted(muted);
-  };
+  }, []);
 
   return (
     <div className="flex flex-col h-screen w-screen bg-[#05070a] text-slate-100 overflow-hidden select-none">
@@ -205,7 +224,7 @@ export default function Home() {
             onUpdateTelemetry={handleUpdateTelemetry}
             onAddSnapshot={handleAddSnapshot}
             isRecording={isRecording}
-            onStopRecording={() => setIsRecording(false)}
+            onStopRecording={handleStopRecording}
           />
 
           {/* Glassmorphic Telemetry HUD Overlay */}
@@ -231,34 +250,29 @@ export default function Home() {
           <ControlDock
             theme={currentTheme}
             showFace={showFace}
-            onToggleFace={() => setShowFace(!showFace)}
+            onToggleFace={handleToggleFace}
             showPose={showPose}
-            onTogglePose={() => setShowPose(!showPose)}
+            onTogglePose={handleTogglePose}
             showHands={showHands}
-            onToggleHands={() => setShowHands(!showHands)}
+            onToggleHands={handleToggleHands}
             showThermal={thermalState.enabled}
-            onToggleThermal={() =>
-              setThermalState((s) => ({ ...s, enabled: !s.enabled }))
-            }
+            onToggleThermal={handleToggleThermal}
             showRppg={rppgEnabled}
-            onToggleRppg={() => setRppgEnabled(!rppgEnabled)}
+            onToggleRppg={handleToggleRppg}
             showEdges={edgeState.enabled}
-            onToggleEdges={() =>
-              setEdgeState((s) => ({ ...s, enabled: !s.enabled }))
-            }
+            onToggleEdges={handleToggleEdges}
             glowEnabled={showGlow}
-            onToggleGlow={() => setShowGlow(!showGlow)}
+            onToggleGlow={handleToggleGlow}
             isMirrored={isMirrored}
-            onToggleMirror={() => setIsMirrored(!isMirrored)}
+            onToggleMirror={handleToggleMirror}
             showHud={showHud}
-            onToggleHud={() => setShowHud(!showHud)}
+            onToggleHud={handleToggleHud}
             onTakeSnapshot={() => {
-              // Triggered via keyboard or dock
               const evt = new KeyboardEvent("keydown", { key: " " });
               window.dispatchEvent(evt);
             }}
             isRecording={isRecording}
-            onToggleRecording={() => setIsRecording(!isRecording)}
+            onToggleRecording={handleToggleRecording}
           />
 
           {/* Sidebar Toggle Handle Button */}
@@ -291,7 +305,7 @@ export default function Home() {
             <PulseVitalsMonitor
               vitals={vitals}
               enabled={rppgEnabled}
-              onToggle={() => setRppgEnabled(!rppgEnabled)}
+              onToggle={handleToggleRppg}
             />
 
             {/* Thermal Vision Controls */}

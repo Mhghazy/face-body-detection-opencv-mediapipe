@@ -13,6 +13,11 @@ export interface EdgeFilterState {
 
 export class EdgeFilterEngine {
   private offscreenCanvas: HTMLCanvasElement | null = null;
+  private offCtx: CanvasRenderingContext2D | null = null;
+  private grayBuffer: Uint8Array | null = null;
+  private edgeData: ImageData | null = null;
+  private currentSw = 0;
+  private currentSh = 0;
 
   constructor() {
     if (typeof document !== "undefined") {
@@ -32,84 +37,82 @@ export class EdgeFilterEngine {
   ) {
     if (!state.enabled || !this.offscreenCanvas) return;
 
-    const scale = 0.5; // Downscale factor for high FPS processing
-    const sw = Math.floor(width * scale);
-    const sh = Math.floor(height * scale);
+    // Use a performant fixed 320x180 convolution buffer
+    const sw = 320;
+    const sh = 180;
 
     const offCanvas = this.offscreenCanvas;
-    if (offCanvas.width !== sw || offCanvas.height !== sh) {
+    if (offCanvas.width !== sw || offCanvas.height !== sh || !this.offCtx) {
       offCanvas.width = sw;
       offCanvas.height = sh;
+      this.offCtx = offCanvas.getContext("2d", { willReadFrequently: true });
+      this.currentSw = sw;
+      this.currentSh = sh;
+      this.grayBuffer = new Uint8Array(sw * sh);
+      this.edgeData = this.offCtx ? this.offCtx.createImageData(sw, sh) : null;
     }
 
-    const offCtx = offCanvas.getContext("2d", { willReadFrequently: true });
-    if (!offCtx) return;
+    const offCtx = this.offCtx;
+    if (!offCtx || !this.grayBuffer || !this.edgeData) return;
 
     // Draw downscaled frame
     offCtx.drawImage(video, 0, 0, sw, sh);
     const imgData = offCtx.getImageData(0, 0, sw, sh);
     const src = imgData.data;
+    const gray = this.grayBuffer;
 
-    // Grayscale buffer
-    const gray = new Uint8Array(sw * sh);
+    // Fast Grayscale conversion
     for (let i = 0, p = 0; i < src.length; i += 4, p++) {
-      gray[p] = Math.round(src[i] * 0.299 + src[i + 1] * 0.587 + src[i + 2] * 0.114);
+      gray[p] = (src[i] * 77 + src[i + 1] * 150 + src[i + 2] * 29) >> 8;
     }
 
     // Output edges buffer
-    const edgeData = offCtx.createImageData(sw, sh);
-    const dst = edgeData.data;
+    const dst32 = new Uint32Array(this.edgeData.data.buffer);
+    dst32.fill(0); // clear previous frame
 
     // Parse hex color
     const hex = state.color.replace("#", "");
     const er = parseInt(hex.substring(0, 2), 16) || 0;
     const eg = parseInt(hex.substring(2, 4), 16) || 255;
     const eb = parseInt(hex.substring(4, 6), 16) || 255;
+    const fullColor32 = (255 << 24) | (eb << 16) | (eg << 8) | er;
 
     const threshold = state.threshold;
+    const isCanny = state.type === "canny";
 
-    // Sobel 3x3 Convolution
+    // Fast Sobel 3x3 Convolution with Manhattan gradient approximation
     for (let y = 1; y < sh - 1; y++) {
+      const rowOffset = y * sw;
       for (let x = 1; x < sw - 1; x++) {
-        const p = y * sw + x;
+        const p = rowOffset + x;
 
         // Sobel kernels
-        // Gx: [-1 0 1; -2 0 2; -1 0 1]
         const gx =
-          -1 * gray[p - sw - 1] + 1 * gray[p - sw + 1] +
-          -2 * gray[p - 1]      + 2 * gray[p + 1] +
-          -1 * gray[p + sw - 1] + 1 * gray[p + sw + 1];
+          -gray[p - sw - 1] + gray[p - sw + 1] -
+          (gray[p - 1] << 1) + (gray[p + 1] << 1) -
+          gray[p + sw - 1] + gray[p + sw + 1];
 
-        // Gy: [-1 -2 -1; 0 0 0; 1 2 1]
         const gy =
-          -1 * gray[p - sw - 1] - 2 * gray[p - sw] - 1 * gray[p - sw + 1] +
-           1 * gray[p + sw - 1] + 2 * gray[p + sw] + 1 * gray[p + sw + 1];
+          -gray[p - sw - 1] - (gray[p - sw] << 1) - gray[p - sw + 1] +
+          gray[p + sw - 1] + (gray[p + sw] << 1) + gray[p + sw + 1];
 
-        const mag = Math.sqrt(gx * gx + gy * gy);
-        const idx = p * 4;
+        // Manhattan distance approximation (5x faster than Math.sqrt)
+        const mag = Math.abs(gx) + Math.abs(gy);
 
-        if (state.type === "canny") {
-          // Adaptive threshold with non-linear boost
+        if (isCanny) {
           if (mag > threshold) {
-            dst[idx] = er;
-            dst[idx + 1] = eg;
-            dst[idx + 2] = eb;
-            dst[idx + 3] = 255;
+            dst32[p] = fullColor32;
           }
         } else {
-          // Continuous Sobel gradient glow
           if (mag > threshold * 0.5) {
-            const alphaFactor = Math.min(1.0, mag / 200.0);
-            dst[idx] = er;
-            dst[idx + 1] = eg;
-            dst[idx + 2] = eb;
-            dst[idx + 3] = Math.round(alphaFactor * 255);
+            const alpha = Math.min(255, (mag * 255) / 400) | 0;
+            dst32[p] = (alpha << 24) | (eb << 16) | (eg << 8) | er;
           }
         }
       }
     }
 
-    offCtx.putImageData(edgeData, 0, 0);
+    offCtx.putImageData(this.edgeData, 0, 0);
 
     // Composite scaled edge map back to viewport
     ctx.save();

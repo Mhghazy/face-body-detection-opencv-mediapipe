@@ -10,7 +10,7 @@ interface ThemeSelectorProps {
   onSelectTheme: (theme: ThemeColors) => void;
 }
 
-export const ThemeSelector: React.FC<ThemeSelectorProps> = ({
+const ThemeSelectorComponent: React.FC<ThemeSelectorProps> = ({
   currentTheme,
   onSelectTheme,
 }) => {
@@ -69,3 +69,5 @@ export const ThemeSelector: React.FC<ThemeSelectorProps> = ({
     </div>
   );
 };
+
+export const ThemeSelector = React.memo(ThemeSelectorComponent);

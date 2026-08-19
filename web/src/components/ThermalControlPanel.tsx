@@ -11,7 +11,7 @@ interface ThermalControlPanelProps {
   primaryTempC: number | null;
 }
 
-export const ThermalControlPanel: React.FC<ThermalControlPanelProps> = ({
+const ThermalControlPanelComponent: React.FC<ThermalControlPanelProps> = ({
   thermalState,
   onUpdate,
   primaryTempC,
@@ -236,3 +236,5 @@ export const ThermalControlPanel: React.FC<ThermalControlPanelProps> = ({
     </div>
   );
 };
+
+export const ThermalControlPanel = React.memo(ThermalControlPanelComponent);

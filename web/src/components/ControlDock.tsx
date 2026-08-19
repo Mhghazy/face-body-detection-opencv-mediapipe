@@ -42,7 +42,7 @@ interface ControlDockProps {
   onToggleRecording: () => void;
 }
 
-export const ControlDock: React.FC<ControlDockProps> = ({
+const ControlDockComponent: React.FC<ControlDockProps> = ({
   theme,
   showFace,
   onToggleFace,
@@ -259,3 +259,5 @@ export const ControlDock: React.FC<ControlDockProps> = ({
     </div>
   );
 };
+
+export const ControlDock = React.memo(ControlDockComponent);

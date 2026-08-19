@@ -11,7 +11,7 @@ interface EdgeFilterControlsProps {
   themeEdgeColor: string;
 }
 
-export const EdgeFilterControls: React.FC<EdgeFilterControlsProps> = ({
+const EdgeFilterControlsComponent: React.FC<EdgeFilterControlsProps> = ({
   state,
   onUpdate,
   themeEdgeColor,
@@ -122,3 +122,5 @@ export const EdgeFilterControls: React.FC<EdgeFilterControlsProps> = ({
     </div>
   );
 };
+
+export const EdgeFilterControls = React.memo(EdgeFilterControlsComponent);

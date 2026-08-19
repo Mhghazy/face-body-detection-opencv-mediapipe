@@ -60,7 +60,7 @@ interface CameraViewfinderProps {
   externalMediaSource?: HTMLVideoElement | HTMLImageElement | null;
 }
 
-export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
+const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
   theme,
   deviceId,
   resolution,
@@ -102,6 +102,7 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
   // FPS & Telemetry state tracking
   const fpsSmoothedRef = useRef(0);
   const lastFrameTimeRef = useRef(performance.now());
+  const lastTelemetryTimeRef = useRef(0);
   const requestAnimRef = useRef<number | null>(null);
 
   // Initialize Engines
@@ -332,12 +333,14 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
       }
     });
 
-    // 3. Dense Face Vertices
+    // 3. Dense Face Vertices - Batched into a single path
     ctx.fillStyle = theme.faceVertex;
+    ctx.beginPath();
     for (let i = 0; i < landmarks.length; i += 3) {
       const pt = landmarks[i];
-      ctx.fillRect(pt.x * w - 1, pt.y * h - 1, 2, 2);
+      ctx.rect(pt.x * w - 1, pt.y * h - 1, 2, 2);
     }
+    ctx.fill();
   };
 
   const drawPoseSkeleton = (
@@ -572,21 +575,20 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
             pulseWave: [],
           };
 
-          if (rppgEngine) {
-            vitals = rppgEngine.processFrame(video, activeFace, timeMs);
+          // 11. Push Telemetry Data (Throttled to ~7 Hz to prevent React 60 FPS re-render storms)
+          if (now - lastTelemetryTimeRef.current >= 140) {
+            lastTelemetryTimeRef.current = now;
+            onUpdateTelemetry({
+              fps: Math.round(fpsSmoothedRef.current),
+              inferenceMs: detections.inferenceTimeMs,
+              faceCount: detections.faces.length,
+              poseCount: detections.poses.length,
+              handCount: detections.hands.length,
+              primaryTempC,
+              isFever,
+              vitals,
+            });
           }
-
-          // 11. Push Telemetry Data
-          onUpdateTelemetry({
-            fps: fpsSmoothedRef.current,
-            inferenceMs: detections.inferenceTimeMs,
-            faceCount: detections.faces.length,
-            poseCount: detections.poses.length,
-            handCount: detections.hands.length,
-            primaryTempC,
-            isFever,
-            vitals,
-          });
         }
       }
 
@@ -676,3 +678,5 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
     </div>
   );
 };
+
+export const CameraViewfinder = React.memo(CameraViewfinderComponent);

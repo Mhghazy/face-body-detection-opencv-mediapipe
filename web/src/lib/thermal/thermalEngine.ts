@@ -22,12 +22,17 @@ export interface ThermalState {
   blendAlpha: number;
 }
 
-// Precomputed Colormap LUTs (256 entries each with [R, G, B])
+// Precomputed 32-bit Color LUTs for instant pixel mapping
 function generateColormapLUTs() {
   const jet: [number, number, number][] = [];
   const hot: [number, number, number][] = [];
   const inferno: [number, number, number][] = [];
   const plasma: [number, number, number][] = [];
+
+  const jet32 = new Uint32Array(256);
+  const hot32 = new Uint32Array(256);
+  const inferno32 = new Uint32Array(256);
+  const plasma32 = new Uint32Array(256);
 
   for (let i = 0; i < 256; i++) {
     const t = i / 255.0;
@@ -36,31 +41,52 @@ function generateColormapLUTs() {
     let r = Math.max(0, Math.min(1, 1.5 - Math.abs(t * 4 - 3)));
     let g = Math.max(0, Math.min(1, 1.5 - Math.abs(t * 4 - 2)));
     let b = Math.max(0, Math.min(1, 1.5 - Math.abs(t * 4 - 1)));
-    jet.push([Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)]);
+    const jr = Math.round(r * 255);
+    const jg = Math.round(g * 255);
+    const jb = Math.round(b * 255);
+    jet.push([jr, jg, jb]);
+    jet32[i] = (255 << 24) | (jb << 16) | (jg << 8) | jr;
 
     // 2. HOT Colormap (Black -> Red -> Orange -> Yellow -> White)
     let hr = Math.min(1, t * 2.5);
     let hg = Math.max(0, Math.min(1, (t - 0.35) * 2.5));
     let hb = Math.max(0, Math.min(1, (t - 0.75) * 4.0));
-    hot.push([Math.round(hr * 255), Math.round(hg * 255), Math.round(hb * 255)]);
+    const hrr = Math.round(hr * 255);
+    const hgg = Math.round(hg * 255);
+    const hbb = Math.round(hb * 255);
+    hot.push([hrr, hgg, hbb]);
+    hot32[i] = (255 << 24) | (hbb << 16) | (hgg << 8) | hrr;
 
     // 3. INFERNO Colormap (Black -> Purple -> Red -> Orange -> Yellow)
     let ir = Math.min(1, Math.sin(t * Math.PI * 0.9) * 1.2 + (t > 0.6 ? (t - 0.6) * 1.5 : 0));
     let ig = Math.max(0, Math.min(1, Math.pow(t, 2.2) * 1.5));
     let ib = Math.max(0, Math.min(1, Math.sin(t * Math.PI) * 0.6 + (t < 0.3 ? t * 1.8 : 0)));
-    inferno.push([Math.round(ir * 255), Math.round(ig * 255), Math.round(ib * 255)]);
+    const irr = Math.round(ir * 255);
+    const igg = Math.round(ig * 255);
+    const ibb = Math.round(ib * 255);
+    inferno.push([irr, igg, ibb]);
+    inferno32[i] = (255 << 24) | (ibb << 16) | (igg << 8) | irr;
 
     // 4. PLASMA Colormap (Blue -> Violet -> Magenta -> Orange -> Yellow)
     let pr = Math.min(1, Math.sin(t * Math.PI * 0.8) * 0.8 + (t > 0.4 ? (t - 0.4) * 1.6 : 0));
     let pg = Math.max(0, Math.min(1, Math.pow(t, 1.8) * 1.2 - 0.1 * Math.sin(t * Math.PI)));
     let pb = Math.max(0, Math.min(1, Math.cos(t * Math.PI * 0.5) * 0.9 + 0.1));
-    plasma.push([Math.round(pr * 255), Math.round(pg * 255), Math.round(pb * 255)]);
+    const prr = Math.round(pr * 255);
+    const pgg = Math.round(pg * 255);
+    const pbb = Math.round(pb * 255);
+    plasma.push([prr, pgg, pbb]);
+    plasma32[i] = (255 << 24) | (pbb << 16) | (pgg << 8) | prr;
   }
 
-  return { jet, hot, inferno, plasma };
+  return {
+    rgb: { jet, hot, inferno, plasma },
+    lut32: { jet: jet32, hot: hot32, inferno: inferno32, plasma: plasma32 },
+  };
 }
 
-const COLORMAP_LUTS = generateColormapLUTs();
+const COLORMAPS = generateColormapLUTs();
+export const COLORMAP_LUTS = COLORMAPS.rgb;
+const COLORMAP_LUTS_32 = COLORMAPS.lut32;
 
 export class ThermalVisionEngine {
   private perfusionPhase = 0;
@@ -68,10 +94,14 @@ export class ThermalVisionEngine {
   private emaChestC: number | null = null;
   private feverPulsePhase = 0;
   private offscreenCanvas: HTMLCanvasElement | null = null;
+  private offCtx: CanvasRenderingContext2D | null = null;
 
   constructor() {
     if (typeof document !== "undefined") {
       this.offscreenCanvas = document.createElement("canvas");
+      this.offscreenCanvas.width = 160;
+      this.offscreenCanvas.height = 90;
+      this.offCtx = this.offscreenCanvas.getContext("2d", { willReadFrequently: true });
     }
   }
 
@@ -184,18 +214,18 @@ export class ThermalVisionEngine {
   ) {
     if (!state.enabled || !this.offscreenCanvas) return;
 
-    const lut = COLORMAP_LUTS[state.colormap] || COLORMAP_LUTS.jet;
+    const lut32 = COLORMAP_LUTS_32[state.colormap] || COLORMAP_LUTS_32.jet;
     const offCanvas = this.offscreenCanvas;
 
-    // Use a downscaled thermal buffer (e.g. 160x90 or 320x180) for blistering fast 60+ FPS processing
     const tw = 160;
     const th = 90;
     if (offCanvas.width !== tw || offCanvas.height !== th) {
       offCanvas.width = tw;
       offCanvas.height = th;
+      this.offCtx = offCanvas.getContext("2d", { willReadFrequently: true });
     }
 
-    const offCtx = offCanvas.getContext("2d", { willReadFrequently: true });
+    const offCtx = this.offCtx;
     if (!offCtx) return;
 
     // Draw dark cold ambient base
@@ -253,16 +283,21 @@ export class ThermalVisionEngine {
       });
     }
 
-    // Grab pixel data and map to False-Color Colormap LUT
+    // Fast 32-bit word mapping
     const imgData = offCtx.getImageData(0, 0, tw, th);
-    const data = imgData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      const intensity = data[i]; // luminance from grayscale canvas
-      const rgb = lut[intensity] || [0, 0, 0];
-      data[i] = rgb[0];
-      data[i + 1] = rgb[1];
-      data[i + 2] = rgb[2];
-      data[i + 3] = state.blendMode === "full" ? 255 : Math.round(intensity * 1.8);
+    const data8 = imgData.data;
+    const uint32Data = new Uint32Array(data8.buffer);
+    const isFull = state.blendMode === "full";
+
+    for (let i = 0; i < uint32Data.length; i++) {
+      const intensity = data8[i * 4];
+      if (isFull) {
+        uint32Data[i] = lut32[intensity];
+      } else {
+        const rgb = lut32[intensity];
+        const alpha = Math.min(255, (intensity * 1.8) | 0);
+        uint32Data[i] = (alpha << 24) | (rgb & 0x00ffffff);
+      }
     }
     offCtx.putImageData(imgData, 0, 0);
 

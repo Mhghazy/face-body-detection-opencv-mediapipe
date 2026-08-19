@@ -35,7 +35,7 @@ interface TopNavbarProps {
   onToggleBackendMode: () => void;
 }
 
-export const TopNavbar: React.FC<TopNavbarProps> = ({
+const TopNavbarComponent: React.FC<TopNavbarProps> = ({
   theme,
   devices,
   selectedDeviceId,
@@ -195,3 +195,5 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
     </header>
   );
 };
+
+export const TopNavbar = React.memo(TopNavbarComponent);
