@@ -8,19 +8,43 @@
     --foreground: 240 245 255;
   }
 
+  html,
   body {
     background-color: #05070a;
     color: #f0f4ff;
-    overflow-x: hidden;
+    overflow: hidden;
     user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    touch-action: manipulation;
+    height: 100%;
+    height: 100dvh;
+    width: 100vw;
   }
+}
+
+/* iOS Safe Area Padding Utilities */
+.safe-top {
+  padding-top: max(12px, env(safe-area-inset-top));
+}
+
+.safe-bottom {
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+}
+
+.safe-left {
+  padding-left: max(12px, env(safe-area-inset-left));
+}
+
+.safe-right {
+  padding-right: max(12px, env(safe-area-inset-right));
 }
 
 /* Custom Cyberpunk Scrollbar */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
 }
 ::-webkit-scrollbar-track {
   background: rgba(10, 15, 25, 0.6);
@@ -39,6 +63,11 @@
   to { opacity: 1; transform: scale(1); }
 }
 
+@keyframes slideUpSheet {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
 @keyframes fadeOut {
   0% { opacity: 1; }
   80% { opacity: 1; }
@@ -49,17 +78,25 @@
   animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+.animate-slideUp {
+  animation: slideUpSheet 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
 .animate-fadeOut {
   animation: fadeOut 1.8s ease-out forwards;
 }
 
-/* Range input styling */
+/* Touch friendly range input styling */
+input[type="range"] {
+  touch-action: none;
+}
+
 input[type="range"]::-webkit-slider-thumb {
   appearance: none;
-  width: 14px;
-  height: 14px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   background: #00f0ff;
   cursor: pointer;
-  box-shadow: 0 0 10px rgba(0, 240, 255, 0.8);
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.9);
 }

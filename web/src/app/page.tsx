@@ -16,7 +16,7 @@ import { ThermalState } from "@/lib/thermal/thermalEngine";
 import { VitalsState } from "@/lib/rppg/rppgEngine";
 import { EdgeFilterState } from "@/lib/edge/edgeEngine";
 import { soundSynth } from "@/lib/audio/soundSynth";
-import { ChevronRight, ChevronLeft, Sliders, Layers } from "lucide-react";
+import { ChevronRight, Sliders, X, Sparkles } from "lucide-react";
 
 export default function Home() {
   // Themes
@@ -29,6 +29,9 @@ export default function Home() {
   const [showGlow, setShowGlow] = useState(true);
   const [isMirrored, setIsMirrored] = useState(true);
   const [showHud, setShowHud] = useState(true);
+
+  // Facing mode (user = front, environment = back camera)
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
 
   // Thermal Vision State
   const [thermalState, setThermalState] = useState<ThermalState>({
@@ -80,7 +83,7 @@ export default function Home() {
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [isMediaStudioOpen, setIsMediaStudioOpen] = useState(false);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Closed by default on mobile, openable via dock/button
 
   // Sound & Fullscreen & Backend mode
   const [isMuted, setIsMuted] = useState(false);
@@ -102,6 +105,13 @@ export default function Home() {
         .catch(console.error);
     }
   }, [selectedDeviceId]);
+
+  // Set desktop sidebar open by default on larger screens
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.innerWidth >= 1024) {
+      setIsSidebarOpen(true);
+    }
+  }, []);
 
   // Recording Timer
   useEffect(() => {
@@ -148,6 +158,16 @@ export default function Home() {
     setSnapshots((prev) => prev.filter((s) => s.id !== id));
   };
 
+  // Camera Facing Mode Toggle (Front <-> Back)
+  const handleToggleFacingMode = useCallback(() => {
+    setFacingMode((prev) => {
+      const next = prev === "user" ? "environment" : "user";
+      setIsMirrored(next === "user"); // Mirror for selfie camera, raw for environment
+      return next;
+    });
+    setSelectedDeviceId(""); // clear exact device id to trigger facingMode constraint
+  }, []);
+
   // Memoized Action Callbacks
   const handleToggleFace = useCallback(() => setShowFace((v) => !v), []);
   const handleTogglePose = useCallback(() => setShowPose((v) => !v), []);
@@ -183,13 +203,15 @@ export default function Home() {
   }, []);
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-[#05070a] text-slate-100 overflow-hidden select-none">
+    <div className="flex flex-col h-full h-[100dvh] w-screen bg-[#05070a] text-slate-100 overflow-hidden select-none">
       {/* Top Navbar */}
       <TopNavbar
         theme={currentTheme}
         devices={devices}
         selectedDeviceId={selectedDeviceId}
         onSelectDevice={setSelectedDeviceId}
+        facingMode={facingMode}
+        onToggleFacingMode={handleToggleFacingMode}
         resolution={resolution}
         onChangeResolution={setResolution}
         isMuted={isMuted}
@@ -211,6 +233,8 @@ export default function Home() {
           <CameraViewfinder
             theme={currentTheme}
             deviceId={selectedDeviceId}
+            facingMode={facingMode}
+            onToggleFacingMode={handleToggleFacingMode}
             resolution={resolution}
             isMirrored={isMirrored}
             showFace={showFace}
@@ -246,7 +270,7 @@ export default function Home() {
             glowEnabled={showGlow}
           />
 
-          {/* Floating Bottom Action Dock */}
+          {/* Floating Bottom Action Dock (Responsive Mobile Thumb Bar & Desktop Power Dock) */}
           <ControlDock
             theme={currentTheme}
             showFace={showFace}
@@ -273,24 +297,27 @@ export default function Home() {
             }}
             isRecording={isRecording}
             onToggleRecording={handleToggleRecording}
+            onOpenStudio={() => setIsSidebarOpen((v) => !v)}
+            onToggleFacingMode={handleToggleFacingMode}
+            isStudioOpen={isSidebarOpen}
           />
 
-          {/* Sidebar Toggle Handle Button */}
+          {/* Desktop Sidebar Toggle Button */}
           <button
             onClick={() => {
               soundSynth.playClick();
               setIsSidebarOpen(!isSidebarOpen);
             }}
             title={isSidebarOpen ? "Collapse Control Studio" : "Expand Control Studio"}
-            className="absolute top-4 right-4 z-30 p-2 rounded-xl bg-slate-950/80 hover:bg-slate-900 border border-cyan-500/30 text-cyan-300 backdrop-blur-xl shadow-lg transition-transform"
+            className="hidden lg:flex absolute top-4 right-4 z-30 p-2 rounded-xl bg-slate-950/80 hover:bg-slate-900 border border-cyan-500/30 text-cyan-300 backdrop-blur-xl shadow-lg transition-transform"
           >
             {isSidebarOpen ? <ChevronRight className="w-5 h-5" /> : <Sliders className="w-5 h-5" />}
           </button>
         </div>
 
-        {/* Collapsible Right Controls Drawer */}
+        {/* Desktop Sidebar Studio (>= 1024px) */}
         {isSidebarOpen && (
-          <aside className="w-80 md:w-96 h-full bg-slate-950/90 border-l border-cyan-500/20 backdrop-blur-2xl p-4 flex flex-col gap-4 overflow-y-auto z-20 shadow-2xl animate-fadeIn">
+          <aside className="hidden lg:flex w-80 xl:w-96 h-full bg-slate-950/90 border-l border-cyan-500/20 backdrop-blur-2xl p-4 flex-col gap-4 overflow-y-auto z-20 shadow-2xl animate-fadeIn">
             <div className="flex items-center justify-between border-b border-white/10 pb-2">
               <span className="text-xs font-mono font-bold tracking-wider text-cyan-300 flex items-center gap-1.5">
                 <Sliders className="w-4 h-4 text-cyan-400" /> VISION CONTROL STUDIO
@@ -324,6 +351,69 @@ export default function Home() {
           </aside>
         )}
       </div>
+
+      {/* Mobile & Tablet Swipeable Glass Bottom Sheet (< 1024px) */}
+      {isSidebarOpen && (
+        <div className="lg:hidden fixed inset-0 z-40 flex flex-col justify-end bg-black/60 backdrop-blur-sm animate-fadeIn">
+          {/* Backdrop dismiss touch target */}
+          <div
+            className="flex-1 w-full"
+            onClick={() => {
+              soundSynth.playClick();
+              setIsSidebarOpen(false);
+            }}
+          />
+
+          {/* Bottom Sheet Modal Container */}
+          <div className="w-full max-h-[82vh] bg-slate-950/95 border-t border-cyan-500/40 rounded-t-3xl p-5 flex flex-col gap-4 shadow-[0_-15px_40px_rgba(0,0,0,0.9)] overflow-y-auto animate-slideUp safe-bottom">
+            {/* Drag Pill Handle */}
+            <div className="flex flex-col items-center gap-2">
+              <div
+                onClick={() => setIsSidebarOpen(false)}
+                className="w-12 h-1.5 rounded-full bg-cyan-400/40 hover:bg-cyan-400 cursor-pointer transition-colors"
+              />
+              <div className="w-full flex items-center justify-between border-b border-white/10 pb-2">
+                <span className="text-xs font-mono font-bold tracking-wider text-cyan-300 flex items-center gap-1.5">
+                  <Sliders className="w-4 h-4 text-cyan-400" /> VISION CONTROL STUDIO
+                </span>
+                <button
+                  onClick={() => {
+                    soundSynth.playClick();
+                    setIsSidebarOpen(false);
+                  }}
+                  className="p-1.5 rounded-lg bg-white/5 text-slate-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Theme Selector */}
+            <ThemeSelector currentTheme={currentTheme} onSelectTheme={setCurrentTheme} />
+
+            {/* rPPG Vitals Monitor */}
+            <PulseVitalsMonitor
+              vitals={vitals}
+              enabled={rppgEnabled}
+              onToggle={handleToggleRppg}
+            />
+
+            {/* Thermal Vision Controls */}
+            <ThermalControlPanel
+              thermalState={thermalState}
+              onUpdate={setThermalState}
+              primaryTempC={primaryTempC}
+            />
+
+            {/* Classical Edge Filter Controls */}
+            <EdgeFilterControls
+              state={edgeState}
+              onUpdate={setEdgeState}
+              themeEdgeColor={currentTheme.edgeFilter}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Media Studio Drawer Modal */}
       <MediaCaptureDrawer

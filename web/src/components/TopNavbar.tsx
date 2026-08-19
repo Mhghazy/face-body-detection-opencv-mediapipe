@@ -1,9 +1,8 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import {
   Camera,
-  Video,
   Settings2,
   Volume2,
   VolumeX,
@@ -12,8 +11,9 @@ import {
   Keyboard,
   Sparkles,
   Server,
-  Layers,
   Film,
+  SwitchCamera,
+  MoreVertical,
 } from "lucide-react";
 import { soundSynth } from "@/lib/audio/soundSynth";
 import { ThemeColors } from "@/lib/themes/themeConfig";
@@ -23,6 +23,8 @@ interface TopNavbarProps {
   devices: MediaDeviceInfo[];
   selectedDeviceId: string;
   onSelectDevice: (id: string) => void;
+  facingMode?: "user" | "environment";
+  onToggleFacingMode?: () => void;
   resolution: string;
   onChangeResolution: (res: string) => void;
   isMuted: boolean;
@@ -40,6 +42,8 @@ const TopNavbarComponent: React.FC<TopNavbarProps> = ({
   devices,
   selectedDeviceId,
   onSelectDevice,
+  facingMode = "user",
+  onToggleFacingMode,
   resolution,
   onChangeResolution,
   isMuted,
@@ -51,32 +55,32 @@ const TopNavbarComponent: React.FC<TopNavbarProps> = ({
   backendMode,
   onToggleBackendMode,
 }) => {
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
   return (
-    <header className="w-full z-30 flex items-center justify-between px-5 py-3 bg-slate-950/80 border-b border-cyan-500/20 backdrop-blur-xl shadow-lg">
+    <header className="w-full z-30 flex items-center justify-between px-3 md:px-5 py-2.5 bg-slate-950/85 border-b border-cyan-500/20 backdrop-blur-xl shadow-lg safe-top">
       {/* Brand Title */}
-      <div className="flex items-center gap-3">
-        <div
-          className="relative p-2 rounded-xl bg-gradient-to-tr from-cyan-500/20 to-purple-500/20 border border-cyan-400/40 shadow-[0_0_20px_rgba(0,240,255,0.3)]"
-        >
-          <Sparkles className="w-5 h-5 text-cyan-300 animate-pulse" />
+      <div className="flex items-center gap-2 md:gap-3">
+        <div className="relative p-1.5 md:p-2 rounded-xl bg-gradient-to-tr from-cyan-500/20 to-purple-500/20 border border-cyan-400/40 shadow-[0_0_20px_rgba(0,240,255,0.3)]">
+          <Sparkles className="w-4 h-4 md:w-5 md:h-5 text-cyan-300 animate-pulse" />
         </div>
         <div className="flex flex-col">
-          <div className="flex items-center gap-2">
-            <h1 className="text-base font-mono font-black tracking-wider text-white">
+          <div className="flex items-center gap-1.5 md:gap-2">
+            <h1 className="text-sm md:text-base font-mono font-black tracking-wider text-white">
               LUMINA <span className="text-cyan-400">CV</span>
             </h1>
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase bg-cyan-950/80 text-cyan-300 border border-cyan-500/40">
-              v2.0 NEXT
+            <span className="px-1.5 py-0.5 rounded text-[8px] md:text-[9px] font-mono font-bold uppercase bg-cyan-950/80 text-cyan-300 border border-cyan-500/40">
+              v2.0
             </span>
           </div>
-          <span className="text-[10px] font-mono text-slate-400">
+          <span className="hidden sm:inline text-[10px] font-mono text-slate-400">
             Neural Multi-Modal Vision & Bio-Telemetry
           </span>
         </div>
       </div>
 
-      {/* Center Controls: Camera selector & Resolution */}
-      <div className="hidden md:flex items-center gap-3">
+      {/* Desktop / Tablet Center Controls */}
+      <div className="hidden lg:flex items-center gap-3">
         {/* Device selector */}
         <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-mono">
           <Camera className="w-3.5 h-3.5 text-cyan-400" />
@@ -138,30 +142,36 @@ const TopNavbarComponent: React.FC<TopNavbarProps> = ({
         </button>
       </div>
 
-      {/* Right Tools */}
-      <div className="flex items-center gap-2">
-        {/* Media Studio */}
+      {/* Right Tools & Mobile Quick Actions */}
+      <div className="flex items-center gap-1.5 md:gap-2">
+        {/* Mobile Camera Flip Button */}
+        {onToggleFacingMode && (
+          <button
+            onClick={() => {
+              soundSynth.playModeSwitch();
+              if (typeof navigator !== "undefined" && navigator.vibrate) {
+                navigator.vibrate(15);
+              }
+              onToggleFacingMode();
+            }}
+            title="Switch Front/Back Camera"
+            className="flex items-center gap-1 p-2 md:px-3 md:py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-cyan-500/30 text-cyan-300 font-mono text-xs font-semibold transition-colors min-h-[40px] min-w-[40px] justify-center"
+          >
+            <SwitchCamera className="w-4 h-4 text-cyan-400" />
+            <span className="hidden sm:inline">{facingMode === "user" ? "Front" : "Back"}</span>
+          </button>
+        )}
+
+        {/* Media Studio Button */}
         <button
           onClick={() => {
             soundSynth.playClick();
             onOpenMediaStudio();
           }}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500 text-black font-mono text-xs font-bold hover:bg-cyan-400 transition-all shadow-[0_0_15px_rgba(0,240,255,0.4)]"
+          className="flex items-center gap-1.5 px-2.5 md:px-3 py-1.5 rounded-xl bg-cyan-500 text-black font-mono text-xs font-bold hover:bg-cyan-400 transition-all shadow-[0_0_15px_rgba(0,240,255,0.4)] min-h-[40px]"
         >
-          <Film className="w-3.5 h-3.5" />
+          <Film className="w-4 h-4" />
           <span className="hidden sm:inline">Media Studio</span>
-        </button>
-
-        {/* Keyboard Shortcuts */}
-        <button
-          onClick={() => {
-            soundSynth.playClick();
-            onOpenShortcuts();
-          }}
-          title="Keyboard Shortcuts"
-          className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition-colors"
-        >
-          <Keyboard className="w-4 h-4" />
         </button>
 
         {/* Audio Mute/Unmute */}
@@ -171,7 +181,7 @@ const TopNavbarComponent: React.FC<TopNavbarProps> = ({
             onToggleMute();
           }}
           title={isMuted ? "Unmute UI Audio" : "Mute UI Audio"}
-          className={`p-2 rounded-xl border transition-colors ${
+          className={`p-2 rounded-xl border transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center ${
             isMuted
               ? "bg-red-950/40 border-red-500/30 text-red-400"
               : "bg-white/5 border-white/10 text-cyan-300 hover:text-white"
@@ -180,14 +190,26 @@ const TopNavbarComponent: React.FC<TopNavbarProps> = ({
           {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
         </button>
 
-        {/* Fullscreen */}
+        {/* Keyboard Shortcuts (Desktop/Tablet) */}
+        <button
+          onClick={() => {
+            soundSynth.playClick();
+            onOpenShortcuts();
+          }}
+          title="Keyboard Shortcuts"
+          className="hidden md:flex p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition-colors min-h-[40px] min-w-[40px] items-center justify-center"
+        >
+          <Keyboard className="w-4 h-4" />
+        </button>
+
+        {/* Fullscreen (Desktop/Tablet) */}
         <button
           onClick={() => {
             soundSynth.playClick();
             onToggleFullscreen();
           }}
           title="Toggle Fullscreen"
-          className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition-colors"
+          className="hidden md:flex p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition-colors min-h-[40px] min-w-[40px] items-center justify-center"
         >
           {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
         </button>

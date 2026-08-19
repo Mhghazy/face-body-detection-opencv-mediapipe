@@ -7,6 +7,7 @@ import {
   RefreshCw,
   Sparkles,
   ShieldAlert,
+  SwitchCamera,
 } from "lucide-react";
 import { WebVisionDetector, DetectionResults } from "@/lib/mediapipe/visionEngine";
 import { ThermalVisionEngine, ThermalState, TemperatureSpot } from "@/lib/thermal/thermalEngine";
@@ -34,6 +35,8 @@ import { SnapshotItem } from "./MediaCaptureDrawer";
 interface CameraViewfinderProps {
   theme: ThemeColors;
   deviceId: string;
+  facingMode?: "user" | "environment";
+  onToggleFacingMode?: () => void;
   resolution: string;
   isMirrored: boolean;
   showFace: boolean;
@@ -63,6 +66,8 @@ interface CameraViewfinderProps {
 const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
   theme,
   deviceId,
+  facingMode = "user",
+  onToggleFacingMode,
   resolution,
   isMirrored,
   showFace,
@@ -81,6 +86,7 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Engines
   const visionDetectorRef = useRef<WebVisionDetector | null>(null);
@@ -98,6 +104,7 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [snapshotAlert, setSnapshotAlert] = useState(false);
+  const [lastTapTime, setLastTapTime] = useState(0);
 
   // FPS & Telemetry state tracking
   const fpsSmoothedRef = useRef(0);
@@ -132,7 +139,7 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
     };
   }, []);
 
-  // Initialize Webcam Stream
+  // Initialize Webcam Stream with facingMode support
   const initWebcam = useCallback(async () => {
     if (externalMediaSource) return;
 
@@ -148,17 +155,22 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
       const reqW = parseInt(wStr, 10) || 1280;
       const reqH = parseInt(hStr, 10) || 720;
 
-      const constraints: MediaStreamConstraints = {
-        video: {
-          deviceId: deviceId ? { exact: deviceId } : undefined,
-          width: { ideal: reqW },
-          height: { ideal: reqH },
-          frameRate: { ideal: 30 },
-        },
-        audio: false,
+      const videoConstraints: MediaTrackConstraints = {
+        width: { ideal: reqW },
+        height: { ideal: reqH },
+        frameRate: { ideal: 30 },
       };
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (deviceId) {
+        videoConstraints.deviceId = { exact: deviceId };
+      } else {
+        videoConstraints.facingMode = { ideal: facingMode };
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints,
+        audio: false,
+      });
       mediaStreamRef.current = stream;
 
       if (videoRef.current) {
@@ -174,7 +186,7 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
         err instanceof Error ? err.message : "Camera permission denied or camera in use.";
       setCameraError(errMsg);
     }
-  }, [deviceId, resolution, externalMediaSource]);
+  }, [deviceId, facingMode, resolution, externalMediaSource]);
 
   useEffect(() => {
     initWebcam();
@@ -194,7 +206,10 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
       recordedChunksRef.current = [];
       try {
         const stream = canvas.captureStream(30);
-        const recorder = new MediaRecorder(stream, { mimeType: "video/webm;codecs=vp9,opus" });
+        const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+          ? "video/webm;codecs=vp9,opus"
+          : "video/webm";
+        const recorder = new MediaRecorder(stream, { mimeType });
 
         recorder.ondataavailable = (e) => {
           if (e.data && e.data.size > 0) {
@@ -232,6 +247,11 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    // Haptic vibration feedback
+    if (typeof navigator !== "undefined" && navigator.vibrate) {
+      navigator.vibrate(20);
+    }
+
     const dataUrl = canvas.toDataURL("image/png");
     const snap: SnapshotItem = {
       id: Date.now().toString(),
@@ -246,10 +266,25 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
     setTimeout(() => setSnapshotAlert(false), 2000);
   }, [onAddSnapshot, thermalState.enabled, thermalState.colormap]);
 
+  // Double tap gesture handler for mobile to flip camera
+  const handleTouchStart = () => {
+    const now = Date.now();
+    if (now - lastTapTime < 300) {
+      // Double tap detected
+      if (onToggleFacingMode) {
+        soundSynth.playModeSwitch();
+        if (typeof navigator !== "undefined" && navigator.vibrate) {
+          navigator.vibrate([15, 30, 15]);
+        }
+        onToggleFacingMode();
+      }
+    }
+    setLastTapTime(now);
+  };
+
   // Global Keyboard Shortcuts Listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept if user is typing in an input
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
 
       const key = e.key.toUpperCase();
@@ -290,7 +325,6 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
     w: number,
     h: number
   ) => {
-    // 1. Draw High-Definition Contours (Jaw, Lips, Eyes, Eyebrows)
     const drawContour = (indices: number[], color: string, lineWidth = 1.5, close = true) => {
       ctx.strokeStyle = color;
       ctx.lineWidth = lineWidth;
@@ -320,7 +354,7 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
     drawContour(LEFT_EYEBROW_INDICES, theme.faceEdge, 1.5, false);
     drawContour(RIGHT_EYEBROW_INDICES, theme.faceEdge, 1.5, false);
 
-    // 2. Irises
+    // Irises
     [LEFT_IRIS_INDICES, RIGHT_IRIS_INDICES].forEach((iris) => {
       ctx.fillStyle = theme.faceVertex;
       for (const idx of iris) {
@@ -333,7 +367,7 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
       }
     });
 
-    // 3. Dense Face Vertices - Batched into a single path
+    // Dense Face Vertices - Batched into a single path
     ctx.fillStyle = theme.faceVertex;
     ctx.beginPath();
     for (let i = 0; i < landmarks.length; i += 3) {
@@ -403,7 +437,6 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
     h: number
   ) => {
     hands.forEach((hand) => {
-      // Connections
       ctx.strokeStyle = theme.handEdge;
       ctx.lineWidth = 2;
       for (const [s, e] of HAND_CONNECTIONS) {
@@ -415,7 +448,6 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
         }
       }
 
-      // Vertices & Fingertips
       hand.forEach((pt, idx) => {
         const px = pt.x * w;
         const py = pt.y * h;
@@ -461,7 +493,6 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
 
         const ctx = canvas.getContext("2d");
         if (ctx) {
-          // 1. Calculate FPS
           const now = performance.now();
           const delta = (now - lastFrameTimeRef.current) / 1000.0;
           lastFrameTimeRef.current = now;
@@ -471,7 +502,7 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
               ? currentFps
               : fpsSmoothedRef.current * 0.9 + currentFps * 0.1;
 
-          // 2. Clear and Draw Video Frame (with horizontal flip if mirrored)
+          // Video Draw with Horizontal Mirroring
           ctx.save();
           if (isMirrored) {
             ctx.translate(vw, 0);
@@ -480,7 +511,7 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
           ctx.drawImage(video, 0, 0, vw, vh);
           ctx.restore();
 
-          // 3. Run MediaPipe Vision Detections
+          // MediaPipe Vision Inference
           let detections: DetectionResults = {
             faces: [],
             poses: [],
@@ -496,7 +527,6 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
             });
           }
 
-          // Remap landmark X if mirrored
           const adjustLandmarks = (lms: { x: number; y: number }[]) => {
             if (!isMirrored) return lms;
             return lms.map((p) => ({ ...p, x: 1.0 - p.x }));
@@ -506,7 +536,7 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
           const activePose = detections.poses.length > 0 ? adjustLandmarks(detections.poses[0]) : null;
           const activeHands = detections.hands.map((h) => adjustLandmarks(h));
 
-          // 4. Thermal False-Color Heatmap Synthesis Layer
+          // Thermal Layer
           let primaryTempC: number | null = null;
           let isFever = false;
           let spots: TemperatureSpot[] = [];
@@ -536,7 +566,7 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
             );
           }
 
-          // 5. Classical Edge Filter Layer (Canny & Sobel)
+          // Edge Filter Layer
           if (edgeState.enabled && edgeEngine) {
             edgeEngine.applyEdgeFilter(ctx, video, vw, vh, {
               ...edgeState,
@@ -544,28 +574,28 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
             });
           }
 
-          // 6. Face Mesh & Contours
+          // Face Mesh
           if (showFace && activeFace) {
             drawFaceMesh(ctx, activeFace, vw, vh);
           }
 
-          // 7. Body Pose Skeleton
+          // Pose Skeleton
           if (showPose && activePose) {
             drawPoseSkeleton(ctx, activePose, vw, vh);
           }
 
-          // 8. Hand Keypoint Kinematics
+          // Hands
           if (showHands && activeHands.length > 0) {
             drawHands(ctx, activeHands, vw, vh);
           }
 
-          // 9. Floating Spot Temperature Badges & Scale Legend
+          // Spot Badges & Legend
           if (thermalState.enabled && thermalEngine) {
             thermalEngine.renderSpotBadges(ctx, spots, thermalState.tempUnit, thermalState.feverThresholdC);
             thermalEngine.renderScaleLegend(ctx, vw, vh, thermalState);
           }
 
-          // 10. rPPG Heart Rate & Vital Signs Processing
+          // rPPG Vitals
           let vitals: VitalsState = {
             bpm: 72,
             hrvMs: 45,
@@ -575,7 +605,11 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
             pulseWave: [],
           };
 
-          // 11. Push Telemetry Data (Throttled to ~7 Hz to prevent React 60 FPS re-render storms)
+          if (rppgEngine) {
+            vitals = rppgEngine.processFrame(video, activeFace, timeMs);
+          }
+
+          // Throttled Telemetry Dispatch (prevents mobile re-render overhead)
           if (now - lastTelemetryTimeRef.current >= 140) {
             lastTelemetryTimeRef.current = now;
             onUpdateTelemetry({
@@ -614,7 +648,11 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
   ]);
 
   return (
-    <div className="relative w-full h-full flex items-center justify-center bg-black overflow-hidden select-none">
+    <div
+      ref={containerRef}
+      onTouchStart={handleTouchStart}
+      className="relative w-full h-full flex items-center justify-center bg-black overflow-hidden select-none"
+    >
       {/* Hidden Video Feed */}
       <video
         ref={videoRef}
@@ -642,7 +680,7 @@ const CameraViewfinderComponent: React.FC<CameraViewfinderProps> = ({
               <p className="text-xs font-mono text-slate-400">{cameraError}</p>
               <button
                 onClick={() => initWebcam()}
-                className="mt-2 flex items-center gap-2 py-2 px-5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black font-mono text-xs font-bold transition-all shadow-[0_0_15px_rgba(0,240,255,0.3)]"
+                className="mt-2 flex items-center gap-2 py-3 px-6 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black font-mono text-xs font-bold transition-all shadow-[0_0_15px_rgba(0,240,255,0.3)] min-h-[44px]"
               >
                 <RefreshCw className="w-4 h-4" /> Try Again
               </button>
